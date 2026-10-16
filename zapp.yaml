@@ -9,12 +9,26 @@ description: >-
 author: IBM Z Open Editor
 
 propertyGroups:
+  - name: pli-local
+    language: pli
+    libraries:
+      - name: syslib
+        type: local
+        locations:
+          - 'src/base/cics/plinc'
+        fileExtensions:
+          - inc
+
   - name: search-all-local
     libraries:
       - name: syslib
         type: local
         locations:
           - '**'
+        fileExtensions:
+          - inc
+          - cpy
+
   - name: remote-libraries
     language: cobol
     compilerOptions: CICS

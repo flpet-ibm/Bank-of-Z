@@ -1,0 +1,200 @@
+{
+  "version": "3.0.0",
+  "entries": [
+    {
+      "name": "CUSTOMER-NUMBER",
+      "type": "variable",
+      "language": "cobol",
+      "shortDescription": "Customer Number",
+      "longDescription": "Stores the unique numeric identifier assigned to each customer record being generated. Drives the primary loop for customer data population, is assigned from the generation key range, moved to the last-customer tracking field, and used as the basis for linking associated account records. Values are sequentially derived from the start-to-end key range provided as input parameters.",
+      "origin": "AI",
+      "scope": [
+        {
+          "programName": "BANKDATA"
+        }
+      ]
+    },
+    {
+      "name": "SORTCODE",
+      "type": "variable",
+      "language": "cobol",
+      "shortDescription": "Sort Code",
+      "longDescription": "Stores the bank sort code that uniquely identifies the branch or bank entity. Used to associate both customer and account records with a specific sort code, to construct control table key names (e.g., BANKZCUST<sortcode>, <sortcode>-ACCOUNT-LAST), and to populate host variables for DB2 insert and update operations across the CUSTOMER, ACCOUNT, and CONTROL tables.",
+      "origin": "AI",
+      "scope": [
+        {
+          "programName": "BANKDATA"
+        }
+      ]
+    },
+    {
+      "name": "CUSTOMER-CREDIT-SCORE",
+      "type": "variable",
+      "language": "cobol",
+      "shortDescription": "Customer Credit Score",
+      "longDescription": "Stores the randomly generated numeric credit score for a customer, ranging from 1 to 999. Represents the customer's creditworthiness at the time of data generation and is persisted to the DB2 CUSTOMER table via the host variable HV-CUSTOMER-CREDIT-SCORE. Directly influences downstream credit review scheduling logic.",
+      "origin": "AI",
+      "scope": [
+        {
+          "programName": "BANKDATA"
+        }
+      ]
+    },
+    {
+      "name": "WS-ACCOUNT-TYPE",
+      "type": "variable",
+      "language": "cobol",
+      "shortDescription": "Working-Storage Account Type",
+      "longDescription": "Stores the classification of a bank account as one of five possible product types: ISA, SAVING, CURRENT, LOAN, or MORTGAGE. Used to assign the account product category during account record generation and mapped to the DB2 ACCOUNT table column ACCOUNT_TYPE via the host variable HV-ACCOUNT-TYPE. Also drives conditional logic to determine whether the account balance should be negative (for LOAN and MORTGAGE types).",
+      "origin": "AI",
+      "scope": [
+        {
+          "programName": "BANKDATA"
+        }
+      ]
+    },
+    {
+      "name": "HV-ACCOUNT-INTEREST-RATE",
+      "type": "variable",
+      "language": "cobol",
+      "shortDescription": "Host Variable Account Interest Rate",
+      "longDescription": "A DB2 host variable that stores the interest rate applicable to a bank account, defined as a packed decimal field (S9(4)V99 COMP-3). Populated from the working-storage array of account interest rates (WS-ACCOUNT-INT-RATE) corresponding to the account type, and inserted into the DB2 ACCOUNT table column ACCOUNT_INTEREST_RATE. Values range across different rates per product type (e.g., 2.10 for ISA, 17.90 for LOAN).",
+      "origin": "AI",
+      "scope": [
+        {
+          "programName": "BANKDATA"
+        }
+      ]
+    },
+    {
+      "name": "HV-ACCOUNT-OVERDRAFT-LIMIT",
+      "type": "variable",
+      "language": "cobol",
+      "shortDescription": "Host Variable Account Overdraft Limit",
+      "longDescription": "A DB2 host variable that holds the maximum overdraft amount permitted on a bank account, stored as a signed binary integer (S9(9) COMP). Populated via a conversion from the working-storage overdraft limit array (WS-ACCOUNT-OVERDRAFT-LIM) and inserted into the DB2 ACCOUNT table column ACCOUNT_OVERDRAFT_LIMIT. Only CURRENT accounts carry a non-zero overdraft limit (100); other product types are set to zero.",
+      "origin": "AI",
+      "scope": [
+        {
+          "programName": "BANKDATA"
+        }
+      ]
+    },
+    {
+      "name": "HV-ACCOUNT-AVAILABLE-BALANCE",
+      "type": "variable",
+      "language": "cobol",
+      "shortDescription": "Host Variable Account Available Balance",
+      "longDescription": "A DB2 host variable storing the available balance of a bank account as a packed decimal value (S9(10)V99 COMP-3). Randomly generated within a range of 1 to 999,999 and inserted into the DB2 ACCOUNT table. For LOAN and MORTGAGE account types, the value is negated to reflect a liability balance. Also copied to the actual balance field during initial data generation.",
+      "origin": "AI",
+      "scope": [
+        {
+          "programName": "BANKDATA"
+        }
+      ]
+    },
+    {
+      "name": "HV-ACCOUNT-ACTUAL-BALANCE",
+      "type": "variable",
+      "language": "cobol",
+      "shortDescription": "Host Variable Account Actual Balance",
+      "longDescription": "A DB2 host variable storing the actual (booked) balance of a bank account as a packed decimal value (S9(10)V99 COMP-3). Initially set equal to the available balance, then negated for LOAN and MORTGAGE account types to represent outstanding debt. Inserted into the DB2 ACCOUNT table column ACCOUNT_ACTUAL_BALANCE.",
+      "origin": "AI",
+      "scope": [
+        {
+          "programName": "BANKDATA"
+        }
+      ]
+    },
+    {
+      "name": "HV-CUSTOMER-CREDIT-SCORE",
+      "type": "variable",
+      "language": "cobol",
+      "shortDescription": "Host Variable Customer Credit Score",
+      "longDescription": "A DB2 host variable (S9(4) COMP) used to transfer the customer's credit score from working storage into the DB2 CUSTOMER table column CUSTOMER_CREDIT_SCORE during INSERT operations. Receives its value from the CUSTOMER-CREDIT-SCORE working-storage field after random generation.",
+      "origin": "AI",
+      "scope": [
+        {
+          "programName": "BANKDATA"
+        }
+      ]
+    },
+    {
+      "name": "HV-CUSTOMER-CS-REVIEW-DATE",
+      "type": "variable",
+      "language": "cobol",
+      "shortDescription": "Host Variable Customer Credit Score Review Date",
+      "longDescription": "A DB2 host variable (S9(9) COMP) storing the date on which the customer's credit score is scheduled for review, expressed as an integer in YYYYMMDD format. Computed by adding a randomly generated number of days (1–21) to today's date integer, converted using the COBOL DATE-OF-INTEGER function, and inserted into the DB2 CUSTOMER table column CUSTOMER_CS_REVIEW_DATE.",
+      "origin": "AI",
+      "scope": [
+        {
+          "programName": "BANKDATA"
+        }
+      ]
+    },
+    {
+      "name": "HV-CONTROL-NAME",
+      "type": "variable",
+      "language": "cobol",
+      "shortDescription": "Host Variable Control Name",
+      "longDescription": "A DB2 host variable (PIC X(32)) used as the primary key when reading from, inserting into, and updating the DB2 CONTROL table. The name is dynamically constructed by concatenating a prefix (e.g., 'BANKZCUST'), the bank sort code, or account counter identifiers (e.g., '<sortcode>-ACCOUNT-LAST', '<sortcode>-ACCOUNT-COUNT') to track the last customer number and account counters per sort code.",
+      "origin": "AI",
+      "scope": [
+        {
+          "programName": "BANKDATA"
+        }
+      ]
+    },
+    {
+      "name": "HV-CONTROL-VALUE-NUM",
+      "type": "variable",
+      "language": "cobol",
+      "shortDescription": "Host Variable Control Value Number",
+      "longDescription": "A DB2 host variable (S9(9) COMP) storing the numeric value associated with a control record in the CONTROL table. Used to persist the last-assigned customer number and account count/last account number for each sort code. Populated from LAST-CUSTOMER-NUMBER, LAST-ACCOUNT-NUMBER, or NUMBER-OF-ACCOUNTS and written to the CONTROL table via INSERT and UPDATE SQL statements.",
+      "origin": "AI",
+      "scope": [
+        {
+          "programName": "BANKDATA"
+        }
+      ]
+    },
+    {
+      "name": "NUMBER-OF-ACCOUNTS",
+      "type": "variable",
+      "language": "cobol",
+      "shortDescription": "Number of Accounts",
+      "longDescription": "Tracks the running total count of bank account records successfully inserted into the DB2 ACCOUNT table during the data generation run. Incremented by 1 for each account record written, initialized to zero at the start of processing, and ultimately written to the CONTROL table as the ACCOUNT-COUNT value for the sort code.",
+      "origin": "AI",
+      "scope": [
+        {
+          "programName": "BANKDATA"
+        }
+      ]
+    },
+    {
+      "name": "LAST-ACCOUNT-NUMBER",
+      "type": "variable",
+      "language": "cobol",
+      "shortDescription": "Last Account Number",
+      "longDescription": "Stores the account number of the most recently generated and inserted bank account record. Updated each time an account is written to the DB2 ACCOUNT table and subsequently persisted to the CONTROL table under the key '<sortcode>-ACCOUNT-LAST' to track the highest account number issued for a given sort code.",
+      "origin": "AI",
+      "scope": [
+        {
+          "programName": "BANKDATA"
+        }
+      ]
+    },
+    {
+      "name": "WS-TODAY-INT",
+      "type": "variable",
+      "language": "cobol",
+      "shortDescription": "Working-Storage Today Integer",
+      "longDescription": "Stores the current date represented as a Lilian integer (number of days since a base date), derived by applying the COBOL INTEGER-OF-DATE intrinsic function to today's date in YYYYMMDD format. Used as the base value for computing the customer credit score review date by adding a random number of days (1–21), ensuring review dates are always set relative to the current processing date.",
+      "origin": "AI",
+      "scope": [
+        {
+          "programName": "BANKDATA"
+        }
+      ]
+    }
+  ]
+}
