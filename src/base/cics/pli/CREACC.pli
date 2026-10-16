@@ -1,4 +1,5 @@
 *PROCESS SYSTEM(CICS) SQL MARGINS(1,72);
+ /* @pli-local */
  /***************************************************************** */
  /*                                                                */
  /*  Copyright IBM Corp. 2023                                      */
