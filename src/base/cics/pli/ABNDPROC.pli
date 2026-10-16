@@ -1,0 +1,69 @@
+ *PROCESS CICS;
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                         */
+ /*  ABNDPROC - Abend Processor                                       */
+ /*  Processes application abends and writes them to the ABNDFILE     */
+ /*  KSDS datastore for centralised viewing.                          */
+ /* ----------------------------------------------------------------- */
+ ABNDPROC: PROCEDURE OPTIONS(MAIN REENTRANT);
+
+   /* ----------------------------------------------------------------*/
+   /*  CICS response codes                                            */
+   /* ----------------------------------------------------------------*/
+   DCL WS_CICS_RESP        FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2       FIXED BIN(31) INIT(0);
+
+   /* ----------------------------------------------------------------*/
+   /*  Abend info record (COMMAREA input - mirrors ABNDINFO.cpy)      */
+   /* ----------------------------------------------------------------*/
+   DCL COMM_PTR            POINTER;
+   DCL 1 DFHCOMMAREA BASED(COMM_PTR),
+         2 COMM_VSAM_KEY,
+           3 COMM_UTIME_KEY   FIXED DEC(15,0),
+           3 COMM_TASKNO_KEY  CHAR(4),
+         2 COMM_APPLID        CHAR(8),
+         2 COMM_TRANID        CHAR(4),
+         2 COMM_DATE          CHAR(10),
+         2 COMM_TIME          CHAR(8),
+         2 COMM_CODE          CHAR(4),
+         2 COMM_PROGRAM       CHAR(8),
+         2 COMM_RESPCODE      CHAR(10),
+         2 COMM_RESP2CODE     CHAR(10),
+         2 COMM_SQLCODE       CHAR(10),
+         2 COMM_FREEFORM      CHAR(600);
+
+   DCL WS_ABND_AREA        CHAR(659);  /* same layout as DFHCOMMAREA  */
+   DCL WS_ABND_KEY         CHAR(19);   /* UTIME(15) + TASKNO(4)       */
+   DCL WS_CA_LEN           FIXED BIN(15);
+
+   /* ================================================================*/
+   /*  MAIN LOGIC                                                     */
+   /* ================================================================*/
+
+   /* Get COMMAREA address */
+   EXEC CICS ADDRESS
+        COMMAREA(COMM_PTR)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   /* Copy commarea to local working storage */
+   WS_ABND_AREA = UNSPEC(DFHCOMMAREA);
+
+   /* Write abend record to ABNDFILE KSDS */
+   WS_ABND_KEY = SUBSTR(WS_ABND_AREA, 1, 19);
+   EXEC CICS WRITE
+        FILE('ABNDFILE')
+        FROM(WS_ABND_AREA)
+        RIDFLD(WS_ABND_KEY)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+     PUT SKIP LIST('**** Unable to write to ABNDFILE !!!');
+     PUT SKIP LIST('RESP=' || CHAR(WS_CICS_RESP) ||
+                   ' RESP2=' || CHAR(WS_CICS_RESP2));
+   END;
+
+   EXEC CICS RETURN ;
+
+ END ABNDPROC;

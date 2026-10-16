@@ -1,0 +1,321 @@
+ *PROCESS CICS,SQL;
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                         */
+ /* ----------------------------------------------------------------- */
+ /*  UPDCUST - Update Customer                                        */
+ /*                                                                   */
+ /*  Receives all customer fields in COMMAREA, validates title,       */
+ /*  reads the matching DB2 row, then updates the CUSTOMER table.     */
+ /*  Returns the full updated record in the COMMAREA.                 */
+ /* ----------------------------------------------------------------- */
+ UPDCUST: PROCEDURE OPTIONS(MAIN REENTRANT);
+
+   /* ----------------------------------------------------------------*/
+   /*  SQLCA                                                          */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL INCLUDE SQLCA;
+
+   /* ----------------------------------------------------------------*/
+   /*  CUSTOMER table declaration                                     */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL DECLARE CUSTOMER TABLE
+     ( CUSTOMER_EYECATCHER          CHAR(4),
+       CUSTOMER_SORTCODE            CHAR(6)   NOT NULL,
+       CUSTOMER_NUMBER              CHAR(10)  NOT NULL,
+       CUSTOMER_TITLE               CHAR(10),
+       CUSTOMER_FIRST_NAME          CHAR(50),
+       CUSTOMER_LAST_NAME           CHAR(50),
+       CUSTOMER_DATE_OF_BIRTH       INTEGER,
+       CUSTOMER_PHONE               CHAR(20),
+       CUSTOMER_ADDR_LINE1          CHAR(50),
+       CUSTOMER_ADDR_LINE2          CHAR(50),
+       CUSTOMER_CITY                CHAR(50),
+       CUSTOMER_POSTCODE            CHAR(10),
+       CUSTOMER_COUNTRY             CHAR(50),
+       CUSTOMER_STATUS              CHAR(10),
+       CUSTOMER_CREATED_DATE        INTEGER,
+       CUSTOMER_CREDIT_SCORE        SMALLINT,
+       CUSTOMER_CS_REVIEW_DATE      INTEGER );
+
+   /* ----------------------------------------------------------------*/
+   /*  Sort code                                                      */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE SORTCODE;
+
+   /* ----------------------------------------------------------------*/
+   /*  DB2 host variables                                             */
+   /* ----------------------------------------------------------------*/
+   DCL HV_CUSTOMER_EYECATCHER      CHAR(4);
+   DCL HV_CUSTOMER_SORTCODE        CHAR(6);
+   DCL HV_CUSTOMER_NUMBER          CHAR(10);
+   DCL HV_CUSTOMER_TITLE           CHAR(10);
+   DCL HV_CUSTOMER_FIRST_NAME      CHAR(50);
+   DCL HV_CUSTOMER_LAST_NAME       CHAR(50);
+   DCL HV_CUSTOMER_DOB             FIXED BIN(31);
+   DCL HV_CUSTOMER_PHONE           CHAR(20);
+   DCL HV_CUSTOMER_ADDR_LINE1      CHAR(50);
+   DCL HV_CUSTOMER_ADDR_LINE2      CHAR(50);
+   DCL HV_CUSTOMER_CITY            CHAR(50);
+   DCL HV_CUSTOMER_POSTCODE        CHAR(10);
+   DCL HV_CUSTOMER_COUNTRY         CHAR(50);
+   DCL HV_CUSTOMER_STATUS          CHAR(10);
+   DCL HV_CUSTOMER_CREATE_DATE     FIXED BIN(31);
+   DCL HV_CUSTOMER_CREDIT_SCORE    FIXED BIN(15);
+   DCL HV_CUSTOMER_CS_REVIEW_DATE  FIXED BIN(31);
+
+   /* ----------------------------------------------------------------*/
+   /*  CICS response codes                                            */
+   /* ----------------------------------------------------------------*/
+   DCL WS_CICS_RESP               FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2              FIXED BIN(31) INIT(0);
+
+   /* ----------------------------------------------------------------*/
+   /*  Work variables                                                 */
+   /* ----------------------------------------------------------------*/
+   DCL SQLCODE_DISPLAY             FIXED BIN(31);
+   DCL WS_U_TIME                   FIXED DEC(15,0) INIT(0);
+   DCL WS_ORIG_DATE                CHAR(10);
+   DCL WS_TIME_NOW                 CHAR(6);
+   DCL WS_ABEND_PGM                CHAR(8) INIT('ABNDPROC');
+   DCL MY_ABEND_CODE               CHAR(4);
+   DCL WS_CA_LEN                   FIXED BIN(15);
+   DCL WS_TITLE_VALID              CHAR(1);
+   DCL WS_UNSTR_TITLE              CHAR(10);
+
+   /* ----------------------------------------------------------------*/
+   /*  Abend info record                                              */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE ABNDINFO;
+
+   /* ----------------------------------------------------------------*/
+   /*  COMMAREA                                                       */
+   /* ----------------------------------------------------------------*/
+   DCL COMMAREA_PTR                POINTER;
+   %INCLUDE UPDCUST;
+   DCL 1 DFHCOMMAREA BASED(COMMAREA_PTR) LIKE UPDCUST_COMMAREA;
+
+   /* ================================================================*/
+   /*  MAIN PROCEDURE LOGIC                                           */
+   /* ================================================================*/
+
+   /* Get the COMMAREA address */
+   EXEC CICS ADDRESS
+        COMMAREA(COMMAREA_PTR)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   /* Validate title */
+   WS_UNSTR_TITLE = COMM_TITLE;
+   WS_TITLE_VALID = 'N';
+
+   SELECT;
+     WHEN (WS_UNSTR_TITLE = 'Professor ' |
+           WS_UNSTR_TITLE = 'Mr        ' |
+           WS_UNSTR_TITLE = 'Mrs       ' |
+           WS_UNSTR_TITLE = 'Miss      ' |
+           WS_UNSTR_TITLE = 'Ms        ' |
+           WS_UNSTR_TITLE = 'Dr        ' |
+           WS_UNSTR_TITLE = 'Drs       ' |
+           WS_UNSTR_TITLE = 'Lord      ' |
+           WS_UNSTR_TITLE = 'Sir       ' |
+           WS_UNSTR_TITLE = 'Lady      ' |
+           WS_UNSTR_TITLE = '          ')
+       WS_TITLE_VALID = 'Y';
+     OTHERWISE
+       WS_TITLE_VALID = 'N';
+   END;
+
+   IF WS_TITLE_VALID = 'N' THEN DO;
+     COMM_UPD_SUCCESS = 'N';
+     COMM_UPD_FAIL_CD = 'T';
+     EXEC CICS RETURN ;
+   END;
+
+   CALL UPDATE_CUSTOMER_DB2;
+
+   CALL GET_ME_OUT_OF_HERE;
+
+ /* ------------------------------------------------------------------*/
+ /*  UPDATE_CUSTOMER_DB2 - SELECT then UPDATE customer row            */
+ /* ------------------------------------------------------------------*/
+ UPDATE_CUSTOMER_DB2: PROCEDURE;
+
+   /* Validate at least one name/address field is present */
+   IF (COMM_FIRST_NAME = ' ' | SUBSTR(COMM_FIRST_NAME,1,1) = ' ') &
+      (COMM_LAST_NAME  = ' ' | SUBSTR(COMM_LAST_NAME, 1,1) = ' ') &
+      (COMM_ADDR_LINE1 = ' ' | SUBSTR(COMM_ADDR_LINE1,1,1) = ' ')
+   THEN DO;
+     COMM_UPD_SUCCESS = 'N';
+     COMM_UPD_FAIL_CD = '4';
+     RETURN;
+   END;
+
+   IF COMM_SCODE = ' ' THEN
+     HV_CUSTOMER_SORTCODE = SORTCODE;
+   ELSE
+     HV_CUSTOMER_SORTCODE = COMM_SCODE;
+
+   HV_CUSTOMER_NUMBER = COMM_CUSTNO;
+
+   EXEC SQL
+     SELECT CUSTOMER_EYECATCHER,
+            CUSTOMER_SORTCODE,
+            CUSTOMER_NUMBER,
+            CUSTOMER_TITLE,
+            CUSTOMER_FIRST_NAME,
+            CUSTOMER_LAST_NAME,
+            CUSTOMER_DATE_OF_BIRTH,
+            CUSTOMER_PHONE,
+            CUSTOMER_ADDR_LINE1,
+            CUSTOMER_ADDR_LINE2,
+            CUSTOMER_CITY,
+            CUSTOMER_POSTCODE,
+            CUSTOMER_COUNTRY,
+            CUSTOMER_STATUS,
+            CUSTOMER_CREATED_DATE,
+            CUSTOMER_CREDIT_SCORE,
+            CUSTOMER_CS_REVIEW_DATE
+     INTO  :HV_CUSTOMER_EYECATCHER,
+           :HV_CUSTOMER_SORTCODE,
+           :HV_CUSTOMER_NUMBER,
+           :HV_CUSTOMER_TITLE,
+           :HV_CUSTOMER_FIRST_NAME,
+           :HV_CUSTOMER_LAST_NAME,
+           :HV_CUSTOMER_DOB,
+           :HV_CUSTOMER_PHONE,
+           :HV_CUSTOMER_ADDR_LINE1,
+           :HV_CUSTOMER_ADDR_LINE2,
+           :HV_CUSTOMER_CITY,
+           :HV_CUSTOMER_POSTCODE,
+           :HV_CUSTOMER_COUNTRY,
+           :HV_CUSTOMER_STATUS,
+           :HV_CUSTOMER_CREATE_DATE,
+           :HV_CUSTOMER_CREDIT_SCORE,
+           :HV_CUSTOMER_CS_REVIEW_DATE
+     FROM CUSTOMER
+     WHERE CUSTOMER_SORTCODE = :HV_CUSTOMER_SORTCODE
+       AND CUSTOMER_NUMBER   = :HV_CUSTOMER_NUMBER ;
+
+   IF SQLCODE = 100 THEN DO;
+     COMM_UPD_SUCCESS = 'N';
+     COMM_UPD_FAIL_CD = '1';
+     RETURN;
+   END;
+
+   IF SQLCODE ^= 0 THEN DO;
+     COMM_UPD_SUCCESS = 'N';
+     COMM_UPD_FAIL_CD = '2';
+     RETURN;
+   END;
+
+   /* Conditionally update fields from COMMAREA */
+   IF SUBSTR(COMM_FIRST_NAME,1,1) ^= ' ' THEN DO;
+     HV_CUSTOMER_TITLE      = COMM_TITLE;
+     HV_CUSTOMER_FIRST_NAME = COMM_FIRST_NAME;
+     HV_CUSTOMER_LAST_NAME  = COMM_LAST_NAME;
+   END;
+
+   IF SUBSTR(COMM_PHONE,1,1) ^= ' ' THEN
+     HV_CUSTOMER_PHONE = COMM_PHONE;
+
+   IF SUBSTR(COMM_ADDR_LINE1,1,1) ^= ' ' THEN DO;
+     HV_CUSTOMER_ADDR_LINE1 = COMM_ADDR_LINE1;
+     HV_CUSTOMER_ADDR_LINE2 = COMM_ADDR_LINE2;
+     HV_CUSTOMER_CITY       = COMM_CITY;
+     HV_CUSTOMER_POSTCODE   = COMM_POSTCODE;
+     HV_CUSTOMER_COUNTRY    = COMM_COUNTRY;
+   END;
+
+   IF SUBSTR(COMM_STATUS,1,1) ^= ' ' THEN
+     HV_CUSTOMER_STATUS = COMM_STATUS;
+
+   IF COMM_DOB_YEAR ^= '    ' & COMM_DOB_YEAR ^= '0000' THEN
+     HV_CUSTOMER_DOB = (BIN(COMM_DOB_YEAR,31) * 10000) +
+                       (BIN(COMM_DOB_MONTH,31) * 100) +
+                        BIN(COMM_DOB_DAY,31);
+
+   EXEC SQL
+     UPDATE CUSTOMER
+     SET CUSTOMER_TITLE          = :HV_CUSTOMER_TITLE,
+         CUSTOMER_FIRST_NAME     = :HV_CUSTOMER_FIRST_NAME,
+         CUSTOMER_LAST_NAME      = :HV_CUSTOMER_LAST_NAME,
+         CUSTOMER_DATE_OF_BIRTH  = :HV_CUSTOMER_DOB,
+         CUSTOMER_PHONE          = :HV_CUSTOMER_PHONE,
+         CUSTOMER_ADDR_LINE1     = :HV_CUSTOMER_ADDR_LINE1,
+         CUSTOMER_ADDR_LINE2     = :HV_CUSTOMER_ADDR_LINE2,
+         CUSTOMER_CITY           = :HV_CUSTOMER_CITY,
+         CUSTOMER_POSTCODE       = :HV_CUSTOMER_POSTCODE,
+         CUSTOMER_COUNTRY        = :HV_CUSTOMER_COUNTRY,
+         CUSTOMER_STATUS         = :HV_CUSTOMER_STATUS
+     WHERE CUSTOMER_SORTCODE = :HV_CUSTOMER_SORTCODE
+       AND CUSTOMER_NUMBER   = :HV_CUSTOMER_NUMBER ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     COMM_UPD_SUCCESS = 'N';
+     COMM_UPD_FAIL_CD = '3';
+     RETURN;
+   END;
+
+   /* Map host variables back to COMMAREA */
+   COMM_EYE        = HV_CUSTOMER_EYECATCHER;
+   COMM_SCODE      = HV_CUSTOMER_SORTCODE;
+   COMM_CUSTNO     = HV_CUSTOMER_NUMBER;
+   COMM_TITLE      = HV_CUSTOMER_TITLE;
+   COMM_FIRST_NAME = HV_CUSTOMER_FIRST_NAME;
+   COMM_LAST_NAME  = HV_CUSTOMER_LAST_NAME;
+   COMM_PHONE      = HV_CUSTOMER_PHONE;
+   COMM_ADDR_LINE1 = HV_CUSTOMER_ADDR_LINE1;
+   COMM_ADDR_LINE2 = HV_CUSTOMER_ADDR_LINE2;
+   COMM_CITY       = HV_CUSTOMER_CITY;
+   COMM_POSTCODE   = HV_CUSTOMER_POSTCODE;
+   COMM_COUNTRY    = HV_CUSTOMER_COUNTRY;
+   COMM_STATUS     = HV_CUSTOMER_STATUS;
+
+ COMM_CREATED_YEAR  = SUBSTR(CHAR(HV_CUSTOMER_CREATE_DATE / 10000),1,4);
+  COMM_CREATED_MONTH =
+     SUBSTR(CHAR(MOD(HV_CUSTOMER_CREATE_DATE/100,100)),1,2);
+  COMM_CREATED_DAY   =
+     SUBSTR(CHAR(MOD(HV_CUSTOMER_CREATE_DATE,100)),1,2);
+
+   COMM_DOB_YEAR  = SUBSTR(CHAR(HV_CUSTOMER_DOB / 10000),1,4);
+   COMM_DOB_MONTH = SUBSTR(CHAR(MOD(HV_CUSTOMER_DOB/100,100)),1,2);
+   COMM_DOB_DAY   = SUBSTR(CHAR(MOD(HV_CUSTOMER_DOB,100)),1,2);
+
+   COMM_CREDIT_SCORE    = HV_CUSTOMER_CREDIT_SCORE;
+
+   COMM_CS_REVIEW_YEAR  =
+     SUBSTR(CHAR(HV_CUSTOMER_CS_REVIEW_DATE / 10000),1,4);
+   COMM_CS_REVIEW_MONTH =
+     SUBSTR(CHAR(MOD(HV_CUSTOMER_CS_REVIEW_DATE/100,100)),1,2);
+   COMM_CS_REVIEW_DAY   =
+     SUBSTR(CHAR(MOD(HV_CUSTOMER_CS_REVIEW_DATE,100)),1,2);
+
+   COMM_UPD_SUCCESS = 'Y';
+
+ END UPDATE_CUSTOMER_DB2;
+
+ /* ------------------------------------------------------------------*/
+ /*  GET_ME_OUT_OF_HERE - Return to CICS                              */
+ /* ------------------------------------------------------------------*/
+ GET_ME_OUT_OF_HERE: PROCEDURE;
+
+   EXEC CICS RETURN ;
+
+ END GET_ME_OUT_OF_HERE;
+
+ /* ------------------------------------------------------------------*/
+ /*  POPULATE_TIME_DATE - Get current date and time via CICS          */
+ /* ------------------------------------------------------------------*/
+ POPULATE_TIME_DATE: PROCEDURE;
+
+   EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+
+   EXEC CICS FORMATTIME
+        ABSTIME(WS_U_TIME)
+        DDMMYYYY(WS_ORIG_DATE)
+        TIME(WS_TIME_NOW)
+        DATESEP ;
+
+ END POPULATE_TIME_DATE;
+
+ END UPDCUST;

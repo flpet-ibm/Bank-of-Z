@@ -1,0 +1,329 @@
+ *PROCESS CICS,SQL;
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2026                                         */
+ /* ----------------------------------------------------------------- */
+ /*  INQTRAND - Enquire Transaction Detail                            */
+ /*                                                                   */
+ /*  Retrieves a single transaction identified by its composite key   */
+ /*  (sortcode, account number, date, time, reference) from the       */
+ /*  PROCTRAN table via a DB2 cursor.                                 */
+ /*  Returns success/found flags and transaction detail in COMMAREA.  */
+ /* ----------------------------------------------------------------- */
+ INQTRAND: PROCEDURE OPTIONS(MAIN REENTRANT);
+
+   /* ----------------------------------------------------------------*/
+   /*  SQLCA - must be first EXEC SQL statement                       */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL INCLUDE SQLCA;
+
+   /* ----------------------------------------------------------------*/
+   /*  PROCTRAN table declaration                                     */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL DECLARE PROCTRAN TABLE
+     ( PROCTRAN_EYECATCHER  CHAR(4),
+       PROCTRAN_SORTCODE    CHAR(6)         NOT NULL,
+       PROCTRAN_NUMBER      CHAR(8)         NOT NULL,
+       PROCTRAN_DATE        DATE            NOT NULL,
+       PROCTRAN_TIME        CHAR(6)         NOT NULL,
+       PROCTRAN_REF         CHAR(12)        NOT NULL,
+       PROCTRAN_TYPE        CHAR(3),
+       PROCTRAN_DESC        CHAR(40),
+       PROCTRAN_AMOUNT      DECIMAL(12,2) );
+
+   /* ----------------------------------------------------------------*/
+   /*  TRAND_CURSOR - single transaction by composite key             */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL DECLARE TRAND_CURSOR CURSOR FOR
+     SELECT PROCTRAN_EYECATCHER,
+            PROCTRAN_SORTCODE,
+            PROCTRAN_NUMBER,
+            PROCTRAN_DATE,
+            PROCTRAN_TIME,
+            PROCTRAN_REF,
+            PROCTRAN_TYPE,
+            PROCTRAN_DESC,
+            PROCTRAN_AMOUNT
+     FROM   PROCTRAN
+     WHERE  PROCTRAN_SORTCODE = :HV_PROCTRAN_SORTCODE
+     AND    PROCTRAN_NUMBER   = :HV_PROCTRAN_NUMBER
+     AND    PROCTRAN_DATE     = :HV_PROCTRAN_DATE
+     AND    PROCTRAN_TIME     = :HV_PROCTRAN_TIME
+     AND    PROCTRAN_REF      = :HV_PROCTRAN_REF
+     FOR FETCH ONLY;
+
+   /* ----------------------------------------------------------------*/
+   /*  Sort code constant                                             */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE SORTCODE;
+
+   /* ----------------------------------------------------------------*/
+   /*  DB2 host variables for PROCTRAN table                          */
+   /* ----------------------------------------------------------------*/
+   DCL HV_PROCTRAN_EYECATCHER     CHAR(4);
+   DCL HV_PROCTRAN_SORTCODE       CHAR(6);
+   DCL HV_PROCTRAN_NUMBER         CHAR(8);
+   DCL HV_PROCTRAN_DATE           CHAR(10);   /* DATE as CHAR(10)     */
+   DCL HV_PROCTRAN_TIME           CHAR(6);
+   DCL HV_PROCTRAN_REF            CHAR(12);
+   DCL HV_PROCTRAN_TYPE           CHAR(3);
+   DCL HV_PROCTRAN_DESC           CHAR(40);
+   DCL HV_PROCTRAN_AMOUNT         FIXED DEC(12,2);
+
+   /* ----------------------------------------------------------------*/
+   /*  CICS response codes                                            */
+   /* ----------------------------------------------------------------*/
+   DCL WS_CICS_RESP               FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2              FIXED BIN(31) INIT(0);
+
+   /* ----------------------------------------------------------------*/
+   /*  Miscellaneous work variables                                   */
+   /* ----------------------------------------------------------------*/
+   DCL SQLCODE_DISPLAY             FIXED BIN(31);
+   DCL MY_ABEND_CODE               CHAR(4);
+   DCL WS_ABEND_PGM                CHAR(8)  INIT('ABNDPROC');
+   DCL WS_CA_LEN                   FIXED BIN(15);
+
+   /* Time / date working storage */
+   DCL WS_U_TIME                   FIXED DEC(15,0) INIT(0);
+   DCL WS_ORIG_DATE                CHAR(10);
+   DCL WS_TIME_NOW                 CHAR(6);
+
+   /* Date conversion working storage */
+   DCL 1 WS_DATE_WORK,
+         2 WS_DATE_YYYYMMDD        FIXED DEC(8,0) INIT(0),
+         2 WS_DATE_ISO             CHAR(10);
+   DCL 1 WS_DATE_YYYYMMDD_GRP BASED(ADDR(WS_DATE_YYYYMMDD)),
+         2 WS_DATE_YYYY            CHAR(4),
+         2 WS_DATE_MM              CHAR(2),
+         2 WS_DATE_DD              CHAR(2);
+   DCL 1 WS_DATE_ISO_GRP BASED(ADDR(WS_DATE_ISO)),
+         2 WS_DATE_ISO_YYYY        CHAR(4),
+         2 WS_DATE_ISO_SEP1        CHAR(1),
+         2 WS_DATE_ISO_MM          CHAR(2),
+         2 WS_DATE_ISO_SEP2        CHAR(1),
+         2 WS_DATE_ISO_DD          CHAR(2);
+
+   /* Transaction ID build area */
+   DCL 1 WS_TRAN_ID_PARTS,
+         2 WS_TRAN_ID_SC           CHAR(6),
+         2 WS_TRAN_ID_SEP1         CHAR(1)  INIT('-'),
+         2 WS_TRAN_ID_NUM          CHAR(8),
+         2 WS_TRAN_ID_SEP2         CHAR(1)  INIT('-'),
+         2 WS_TRAN_ID_DATE         CHAR(8),
+         2 WS_TRAN_ID_SEP3         CHAR(1)  INIT('-'),
+         2 WS_TRAN_ID_TIME         CHAR(6),
+         2 WS_TRAN_ID_SEP4         CHAR(1)  INIT('-'),
+         2 WS_TRAN_ID_REF          CHAR(12);
+
+   /* Intermediate numeric-to-char conversion */
+   DCL WS_DATE_NUM_CHAR            CHAR(8);
+
+   /* ----------------------------------------------------------------*/
+   /*  Abend info record                                              */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE ABNDINFO;
+
+   /* ----------------------------------------------------------------*/
+   /*  COMMAREA (INQTRAND interface)                                  */
+   /* ----------------------------------------------------------------*/
+   DCL COMMAREA_PTR                POINTER;
+   %INCLUDE INQTRAND;
+   DCL 1 DFHCOMMAREA BASED(COMMAREA_PTR)
+                     LIKE INQTRAND_COMMAREA;
+
+   /* ================================================================*/
+   /*  MAIN PROCEDURE LOGIC                                           */
+   /* ================================================================*/
+
+   /* Set up abend handler */
+   EXEC CICS HANDLE ABEND LABEL(ABEND_HANDLING) ;
+
+   /* Get the COMMAREA address */
+   EXEC CICS ADDRESS
+        COMMAREA(COMMAREA_PTR)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   /* Validate eyecatcher - set default if not provided */
+   IF INQTRAND_EYE = ' ' | INQTRAND_EYE = '' THEN
+     INQTRAND_EYE = 'ITRD';
+
+   INQTRAND_SUCCESS = 'N';
+   INQTRAND_FOUND   = 'N';
+
+   CALL READ_TRANSACTION_DB2;
+
+   CALL GET_ME_OUT_OF_HERE;
+
+ /* ------------------------------------------------------------------*/
+ /*  READ_TRANSACTION_DB2 - Open cursor, fetch one row, close         */
+ /* ------------------------------------------------------------------*/
+ READ_TRANSACTION_DB2: PROCEDURE;
+
+   /* Prepare query parameters from COMMAREA */
+   HV_PROCTRAN_SORTCODE = INQTRAND_SORTCODE;
+   HV_PROCTRAN_NUMBER   = INQTRAND_ACCNO;
+
+   /* Convert DATE from YYYYMMDD numeric to YYYY-MM-DD string */
+   WS_DATE_NUM_CHAR = CHAR(INQTRAND_DATE, 8);
+   WS_DATE_ISO_YYYY = SUBSTR(WS_DATE_NUM_CHAR, 1, 4);
+   WS_DATE_ISO_SEP1 = '-';
+   WS_DATE_ISO_MM   = SUBSTR(WS_DATE_NUM_CHAR, 5, 2);
+   WS_DATE_ISO_SEP2 = '-';
+   WS_DATE_ISO_DD   = SUBSTR(WS_DATE_NUM_CHAR, 7, 2);
+   HV_PROCTRAN_DATE = WS_DATE_ISO;
+
+   HV_PROCTRAN_TIME = CHAR(INQTRAND_TIME, 6);
+   HV_PROCTRAN_REF  = CHAR(INQTRAND_REF, 12);
+
+   /* Open the DB2 cursor */
+   EXEC SQL OPEN TRAND_CURSOR ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+     CALL ABEND_ROUTINE;
+   END;
+
+   /* Fetch the transaction row */
+   EXEC SQL FETCH TRAND_CURSOR
+     INTO :HV_PROCTRAN_EYECATCHER,
+          :HV_PROCTRAN_SORTCODE,
+          :HV_PROCTRAN_NUMBER,
+          :HV_PROCTRAN_DATE,
+          :HV_PROCTRAN_TIME,
+          :HV_PROCTRAN_REF,
+          :HV_PROCTRAN_TYPE,
+          :HV_PROCTRAN_DESC,
+          :HV_PROCTRAN_AMOUNT ;
+
+   IF SQLCODE = 0 THEN DO;
+     /* Transaction found - populate output fields */
+     INQTRAND_FOUND = 'Y';
+
+     /* Convert DATE from YYYY-MM-DD back to YYYYMMDD */
+     WS_DATE_ISO      = HV_PROCTRAN_DATE;
+     WS_DATE_YYYYMMDD = DEC(WS_DATE_ISO_YYYY || WS_DATE_ISO_MM ||
+                            WS_DATE_ISO_DD, 8, 0);
+
+     /* Build composite transaction ID */
+     WS_TRAN_ID_SC    = HV_PROCTRAN_SORTCODE;
+     WS_TRAN_ID_NUM   = HV_PROCTRAN_NUMBER;
+     WS_TRAN_ID_DATE  = CHAR(WS_DATE_YYYYMMDD, 8);
+     WS_TRAN_ID_TIME  = HV_PROCTRAN_TIME;
+     WS_TRAN_ID_REF   = HV_PROCTRAN_REF;
+
+     INQTRAND_TRAN_ID       = SUBSTR(WS_TRAN_ID_PARTS, 1, 50);
+     INQTRAND_TRAN_SORTCODE = HV_PROCTRAN_SORTCODE;
+     INQTRAND_TRAN_ACCNO    = HV_PROCTRAN_NUMBER;
+     INQTRAND_TRAN_DATE     = WS_DATE_YYYYMMDD;
+     INQTRAND_TRAN_TIME     = DEC(HV_PROCTRAN_TIME, 6, 0);
+     INQTRAND_TRAN_REF      = DEC(HV_PROCTRAN_REF, 12, 0);
+     INQTRAND_TRAN_TYPE     = HV_PROCTRAN_TYPE;
+     INQTRAND_TRAN_DESC     = HV_PROCTRAN_DESC;
+     INQTRAND_TRAN_AMOUNT   = HV_PROCTRAN_AMOUNT;
+
+     INQTRAND_SUCCESS = 'Y';
+   END;
+   ELSE DO;
+     IF SQLCODE = 100 THEN DO;   /* not found - not an error */
+       INQTRAND_FOUND   = 'N';
+       INQTRAND_SUCCESS = 'Y';
+     END;
+     ELSE DO;                    /* SQL error */
+       SQLCODE_DISPLAY = SQLCODE;
+       CALL ABEND_ROUTINE;
+     END;
+   END;
+
+   /* Close the DB2 cursor */
+   EXEC SQL CLOSE TRAND_CURSOR ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+     CALL ABEND_ROUTINE;
+   END;
+
+ END READ_TRANSACTION_DB2;
+
+ /* ------------------------------------------------------------------*/
+ /*  GET_ME_OUT_OF_HERE - Return control to CICS                      */
+ /* ------------------------------------------------------------------*/
+ GET_ME_OUT_OF_HERE: PROCEDURE;
+
+   EXEC CICS RETURN ;
+
+ END GET_ME_OUT_OF_HERE;
+
+ /* ------------------------------------------------------------------*/
+ /*  ABEND_ROUTINE - Standard DB2 error abend                         */
+ /* ------------------------------------------------------------------*/
+ ABEND_ROUTINE: PROCEDURE;
+
+   ABNDINFO_REC       = '' ;
+   ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+   ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+   EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+   ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+   ABND_TRANID        = EIBTRNID;
+   CALL POPULATE_TIME_DATE;
+   ABND_DATE          = WS_ORIG_DATE;
+   ABND_TIME          = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                        SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                        SUBSTR(WS_TIME_NOW,5,2);
+   ABND_UTIME_KEY     = WS_U_TIME;
+   ABND_CODE          = 'ITRD';
+   EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+   ABND_SQLCODE       = SUBSTR(CHAR(SQLCODE_DISPLAY), 1, 10);
+   ABND_FREEFORM      = 'INQTRAND - DB2 Error. SQLCODE=' ||
+                        CHAR(SQLCODE_DISPLAY);
+   WS_CA_LEN = SIZE(ABNDINFO_REC);
+   EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                  COMMAREA(ABNDINFO_REC)
+                  LENGTH(WS_CA_LEN) ;
+   EXEC CICS ABEND ABCODE('ITRD') CANCEL NODUMP ;
+
+ END ABEND_ROUTINE;
+
+ /* ------------------------------------------------------------------*/
+ /*  POPULATE_TIME_DATE - Get current date and time via CICS          */
+ /* ------------------------------------------------------------------*/
+ POPULATE_TIME_DATE: PROCEDURE;
+
+   EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+
+   EXEC CICS FORMATTIME
+        ABSTIME(WS_U_TIME)
+        DDMMYYYY(WS_ORIG_DATE)
+        TIME(WS_TIME_NOW)
+        DATESEP('/') ;
+
+ END POPULATE_TIME_DATE;
+
+ /* ------------------------------------------------------------------*/
+ /*  ABEND_HANDLING - Handle CICS abends                              */
+ /* ------------------------------------------------------------------*/
+ ABEND_HANDLING:
+   EXEC CICS ASSIGN ABCODE(MY_ABEND_CODE) ;
+
+   ABNDINFO_REC       = '' ;
+   ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+   ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+   EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+   ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+   ABND_TRANID        = EIBTRNID;
+   CALL POPULATE_TIME_DATE;
+   ABND_DATE          = WS_ORIG_DATE;
+   ABND_TIME          = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                        SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                        SUBSTR(WS_TIME_NOW,5,2);
+   ABND_UTIME_KEY     = WS_U_TIME;
+   ABND_CODE          = 'ITRD';
+   EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+   ABND_FREEFORM      = 'INQTRAND - Abend occurred';
+   WS_CA_LEN = SIZE(ABNDINFO_REC);
+   EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                  COMMAREA(ABNDINFO_REC)
+                  LENGTH(WS_CA_LEN) ;
+   EXEC CICS RETURN ;
+
+ END INQTRAND;

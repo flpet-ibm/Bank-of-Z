@@ -1,0 +1,36 @@
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                         */
+ /*  DELCUS.inc - Delete Customer commarea                            */
+ /*  Mirrors DELCUS.cpy                                               */
+ /* ----------------------------------------------------------------- */
+ DCL 1 DELCUS_COMMAREA,
+       2 COMM_EYE              CHAR(4),
+       2 COMM_SCODE            CHAR(6),
+       2 COMM_CUSTNO           CHAR(10),
+       2 COMM_NAME,
+         3 COMM_TITLE          CHAR(10),
+         3 COMM_FIRST_NAME     CHAR(50),
+         3 COMM_LAST_NAME      CHAR(50),
+       2 COMM_DOB,
+         3 COMM_DOB_DAY        CHAR(2),
+         3 COMM_DOB_MONTH      CHAR(2),
+         3 COMM_DOB_YEAR       CHAR(4),
+       2 COMM_PHONE            CHAR(20),
+       2 COMM_ADDR,
+         3 COMM_ADDR_LINE1     CHAR(50),
+         3 COMM_ADDR_LINE2     CHAR(50),
+         3 COMM_CITY           CHAR(50),
+         3 COMM_POSTCODE       CHAR(10),
+         3 COMM_COUNTRY        CHAR(50),
+       2 COMM_STATUS           CHAR(10),
+       2 COMM_CREATED_DATE,
+         3 COMM_CREATED_DAY    CHAR(2),
+         3 COMM_CREATED_MONTH  CHAR(2),
+         3 COMM_CREATED_YEAR   CHAR(4),
+       2 COMM_CREDIT_SCORE     FIXED DEC(3,0),
+       2 COMM_CS_REVIEW_DATE,
+         3 COMM_CS_REVIEW_DAY  CHAR(2),
+         3 COMM_CS_REVIEW_MONTH CHAR(2),
+         3 COMM_CS_REVIEW_YEAR CHAR(4),
+       2 COMM_DEL_SUCCESS      CHAR(1),
+       2 COMM_DEL_FAIL_CD      CHAR(1);

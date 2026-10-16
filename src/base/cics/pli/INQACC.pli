@@ -1,0 +1,625 @@
+ *PROCESS CICS,SQL;
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                         */
+ /* ----------------------------------------------------------------- */
+ /*  INQACC - Enquire Account                                         */
+ /*                                                                   */
+ /*  Takes an incoming account number, accesses the DB2 datastore,   */
+ /*  retrieves the matching account record and returns it via the     */
+ /*  COMMAREA.  If the account number is 99999999 the last account    */
+ /*  for the sort-code is returned.                                   */
+ /*  If any error occurs the program abends.                          */
+ /* ----------------------------------------------------------------- */
+ INQACC: PROCEDURE OPTIONS(MAIN REENTRANT);
+
+   /* ----------------------------------------------------------------*/
+   /*  SQLCA - must be first EXEC SQL statement                       */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL INCLUDE SQLCA;
+
+   /* ----------------------------------------------------------------*/
+   /*  ACCOUNT table declaration (from ACCDB2 copybook)               */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL DECLARE ACCOUNT TABLE
+     ( ACCOUNT_EYECATCHER          CHAR(4),
+       ACCOUNT_CUSTOMER_NUMBER     CHAR(10),
+       ACCOUNT_SORTCODE            CHAR(6)      NOT NULL,
+       ACCOUNT_NUMBER              CHAR(8)      NOT NULL,
+       ACCOUNT_TYPE                CHAR(8),
+       ACCOUNT_INTEREST_RATE       DECIMAL(4,2),
+       ACCOUNT_OPENED              DATE,
+       ACCOUNT_OVERDRAFT_LIMIT     INTEGER,
+       ACCOUNT_LAST_STATEMENT      DATE,
+       ACCOUNT_NEXT_STATEMENT      DATE,
+       ACCOUNT_AVAILABLE_BALANCE   DECIMAL(10,2),
+       ACCOUNT_ACTUAL_BALANCE      DECIMAL(10,2) );
+
+   /* ----------------------------------------------------------------*/
+   /*  ACC_CURSOR declaration (for normal account lookup)             */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL DECLARE ACC_CURSOR CURSOR FOR
+     SELECT ACCOUNT_EYECATCHER,
+            ACCOUNT_CUSTOMER_NUMBER,
+            ACCOUNT_SORTCODE,
+            ACCOUNT_NUMBER,
+            ACCOUNT_TYPE,
+            ACCOUNT_INTEREST_RATE,
+            ACCOUNT_OPENED,
+            ACCOUNT_OVERDRAFT_LIMIT,
+            ACCOUNT_LAST_STATEMENT,
+            ACCOUNT_NEXT_STATEMENT,
+            ACCOUNT_AVAILABLE_BALANCE,
+            ACCOUNT_ACTUAL_BALANCE
+     FROM   ACCOUNT
+     WHERE  ACCOUNT_SORTCODE = :HV_ACCOUNT_SORTCODE
+     AND    ACCOUNT_NUMBER   = :HV_ACCOUNT_ACC_NO
+     FOR FETCH ONLY;
+
+   /* ----------------------------------------------------------------*/
+   /*  Sort code constant (from SORTCODE copybook)                    */
+   /* ----------------------------------------------------------------*/
+   DCL SORTCODE                   CHAR(6) INIT('987654');
+
+   /* ----------------------------------------------------------------*/
+   /*  DB2 host variables for ACCOUNT table                           */
+   /* ----------------------------------------------------------------*/
+   DCL HV_ACCOUNT_EYECATCHER      CHAR(4);
+   DCL HV_ACCOUNT_CUST_NO         CHAR(10);
+   DCL HV_ACCOUNT_SORTCODE        CHAR(6);
+   DCL HV_ACCOUNT_ACC_NO          CHAR(8);
+   DCL HV_ACCOUNT_ACC_TYPE        CHAR(8);
+   DCL HV_ACCOUNT_INT_RATE        FIXED DEC(6,2);
+   DCL HV_ACCOUNT_OPENED          CHAR(10);   /* DATE as CHAR(10)     */
+   DCL HV_ACCOUNT_OVERDRAFT_LIM   FIXED BIN(31);
+   DCL HV_ACCOUNT_LAST_STMT       CHAR(10);   /* DATE as CHAR(10)     */
+   DCL HV_ACCOUNT_NEXT_STMT       CHAR(10);   /* DATE as CHAR(10)     */
+   DCL HV_ACCOUNT_AVAIL_BAL       FIXED DEC(12,2);
+   DCL HV_ACCOUNT_ACTUAL_BAL      FIXED DEC(12,2);
+
+   /* ----------------------------------------------------------------*/
+   /*  CICS response codes                                            */
+   /* ----------------------------------------------------------------*/
+   DCL WS_CICS_RESP               FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2              FIXED BIN(31) INIT(0);
+
+   /* ----------------------------------------------------------------*/
+   /*  Output data (mirrors ACCOUNT copybook structure)               */
+   /* ----------------------------------------------------------------*/
+   DCL 1 OUTPUT_DATA,
+         2 ACCOUNT_DATA,
+           3 ACCOUNT_EYE_CATCHER    CHAR(4),
+           3 ACCOUNT_CUST_NO        CHAR(10),
+           3 ACCOUNT_KEY,
+             4 ACCOUNT_SORT_CODE    CHAR(6),
+             4 ACCOUNT_NUMBER_FLD   CHAR(8),
+           3 ACCOUNT_TYPE           CHAR(8),
+           3 ACCOUNT_INTEREST_RATE  FIXED DEC(6,2),
+           3 ACCOUNT_OPENED         FIXED DEC(8,0),
+           3 ACCOUNT_OVERDRAFT_LIMIT FIXED BIN(31),
+           3 ACCOUNT_LAST_STMT_DATE FIXED DEC(8,0),
+           3 ACCOUNT_NEXT_STMT_DATE FIXED DEC(8,0),
+           3 ACCOUNT_AVAILABLE_BALANCE FIXED DEC(12,2),
+           3 ACCOUNT_ACTUAL_BALANCE FIXED DEC(12,2);
+
+   /* ----------------------------------------------------------------*/
+   /*  Date reformatting work area (mirrors DB2-DATE-REFORMAT)        */
+   /* ----------------------------------------------------------------*/
+   DCL 1 DB2_DATE_REFORMAT,
+         2 DB2_DATE_REF_YR          CHAR(4),
+         2 DB2_DATE_REF_SEP1        CHAR(1),
+         2 DB2_DATE_REF_MNTH        CHAR(2),
+         2 DB2_DATE_REF_SEP2        CHAR(1),
+         2 DB2_DATE_REF_DAY         CHAR(2);
+
+   /* ----------------------------------------------------------------*/
+   /*  Miscellaneous work variables                                   */
+   /* ----------------------------------------------------------------*/
+   DCL WS_STORM_DRAIN              CHAR(1) INIT('N');
+   DCL STORM_DRAIN_CONDITION       CHAR(20);
+   DCL SQLCODE_DISPLAY             FIXED BIN(31);
+   DCL MY_ABEND_CODE               CHAR(4);
+
+   /* NCS account number stuff */
+   DCL 1 NCS_ACC_NO_STUFF,
+         2 NCS_ACC_NO_NAME,
+           3 NCS_ACC_NO_ACT_NAME   CHAR(8)  INIT('HBNKACCT'),
+           3 NCS_ACC_NO_TEST_SORT  CHAR(6)  INIT('      '),
+           3 NCS_ACC_NO_FILL       CHAR(2)  INIT('  '),
+         2 NCS_ACC_NO_INC          FIXED BIN(63) INIT(0),
+         2 NCS_ACC_NO_VALUE        FIXED BIN(63) INIT(0),
+         2 NCS_ACC_NO_RESP         CHAR(2)  INIT('00');
+
+   /* Account key for sort-code + account number */
+   DCL 1 ACCOUNT_KY,
+         2 REQUIRED_SORT_CODE      CHAR(6)  INIT('000000'),
+         2 REQUIRED_ACC_NUM        CHAR(8)  INIT('00000000');
+
+   DCL 1 ACCOUNT_KY2,
+         2 REQUIRED_SORT_CODE2     CHAR(6)  INIT('000000'),
+         2 REQUIRED_ACC_NUMBER2    CHAR(8)  INIT('00000000');
+
+   /* Time / date working storage */
+   DCL WS_U_TIME                   FIXED DEC(15,0) INIT(0);
+   DCL WS_ORIG_DATE                CHAR(10);
+   DCL WS_TIME_NOW                 CHAR(6);
+
+   /* Abend program name */
+   DCL WS_ABEND_PGM                CHAR(8) INIT('ABNDPROC');
+
+   /* ----------------------------------------------------------------*/
+   /*  Abend info record (mirrors ABNDINFO copybook)                  */
+   /* ----------------------------------------------------------------*/
+   DCL 1 ABNDINFO_REC,
+         2 ABND_VSAM_KEY,
+           3 ABND_UTIME_KEY        FIXED DEC(15,0),
+           3 ABND_TASKNO_KEY       CHAR(4),
+         2 ABND_APPLID             CHAR(8),
+         2 ABND_TRANID             CHAR(4),
+         2 ABND_DATE               CHAR(10),
+         2 ABND_TIME               CHAR(8),
+         2 ABND_CODE               CHAR(4),
+         2 ABND_PROGRAM            CHAR(8),
+         2 ABND_RESPCODE           CHAR(10),
+         2 ABND_RESP2CODE          CHAR(10),
+         2 ABND_SQLCODE            CHAR(10),
+         2 ABND_FREEFORM           CHAR(600);
+
+   /* ----------------------------------------------------------------*/
+   /*  COMMAREA (INQACC interface - mirrors INQACC copybook)          */
+   /* ----------------------------------------------------------------*/
+   DCL COMMAREA_PTR                POINTER;
+   DCL 1 DFHCOMMAREA BASED(COMMAREA_PTR),
+         2 INQACC_EYE              CHAR(4),
+         2 INQACC_CUSTNO           CHAR(10),
+         2 INQACC_SCODE            CHAR(6),
+         2 INQACC_ACCNO            CHAR(8),
+         2 INQACC_ACC_TYPE         CHAR(8),
+         2 INQACC_INT_RATE         FIXED DEC(6,2),
+         2 INQACC_OPENED           FIXED DEC(8,0),
+         2 INQACC_OVERDRAFT        FIXED DEC(8,0),
+         2 INQACC_LAST_STMT_DT     FIXED DEC(8,0),
+         2 INQACC_NEXT_STMT_DT     FIXED DEC(8,0),
+         2 INQACC_AVAIL_BAL        FIXED DEC(12,2),
+         2 INQACC_ACTUAL_BAL       FIXED DEC(12,2),
+         2 INQACC_SUCCESS          CHAR(1);
+
+   DCL WS_CA_LEN                   FIXED BIN(15);
+
+   /* ================================================================*/
+   /*  MAIN PROCEDURE LOGIC                                           */
+   /* ================================================================*/
+
+   /* Set up abend handler */
+   EXEC CICS HANDLE ABEND LABEL(ABEND_HANDLING) ;
+
+   /* Get the COMMAREA address */
+   EXEC CICS ADDRESS
+        COMMAREA(COMMAREA_PTR)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   /* Initialise output area */
+   ACCOUNT_EYE_CATCHER    = ' ';
+   ACCOUNT_CUST_NO        = ' ';
+   ACCOUNT_SORT_CODE      = ' ';
+   ACCOUNT_NUMBER_FLD     = ' ';
+   ACCOUNT_TYPE           = ' ';
+   ACCOUNT_INTEREST_RATE  = 0;
+   ACCOUNT_OPENED         = 0;
+   ACCOUNT_OVERDRAFT_LIMIT = 0;
+   ACCOUNT_LAST_STMT_DATE = 0;
+   ACCOUNT_NEXT_STMT_DATE = 0;
+   ACCOUNT_AVAILABLE_BALANCE = 0;
+   ACCOUNT_ACTUAL_BALANCE = 0;
+
+   REQUIRED_SORT_CODE = SORTCODE;
+
+   /* Branch depending on account number requested */
+   IF INQACC_ACCNO = '99999999' THEN
+     CALL READ_ACCOUNT_LAST;
+   ELSE
+     CALL READ_ACCOUNT_DB2;
+
+   /* Return account data in COMMAREA */
+   IF ACCOUNT_TYPE = ' ' THEN
+     INQACC_SUCCESS = 'Y';
+   ELSE DO;
+     INQACC_EYE          = ACCOUNT_EYE_CATCHER;
+     INQACC_CUSTNO       = ACCOUNT_CUST_NO;
+     INQACC_SCODE        = ACCOUNT_SORT_CODE;
+     INQACC_ACCNO        = ACCOUNT_NUMBER_FLD;
+     INQACC_ACC_TYPE     = ACCOUNT_TYPE;
+     INQACC_INT_RATE     = ACCOUNT_INTEREST_RATE;
+     INQACC_OPENED       = ACCOUNT_OPENED;
+     INQACC_OVERDRAFT    = ACCOUNT_OVERDRAFT_LIMIT;
+     INQACC_LAST_STMT_DT = ACCOUNT_LAST_STMT_DATE;
+     INQACC_NEXT_STMT_DT = ACCOUNT_NEXT_STMT_DATE;
+     INQACC_AVAIL_BAL    = ACCOUNT_AVAILABLE_BALANCE;
+     INQACC_ACTUAL_BAL   = ACCOUNT_ACTUAL_BALANCE;
+     INQACC_SUCCESS      = 'Y';
+   END;
+
+   CALL GET_ME_OUT_OF_HERE;
+
+ /* ------------------------------------------------------------------*/
+ /*  READ_ACCOUNT_DB2 - Open cursor, fetch, close                     */
+ /* ------------------------------------------------------------------*/
+ READ_ACCOUNT_DB2: PROCEDURE;
+
+   HV_ACCOUNT_ACC_NO    = INQACC_ACCNO;
+   HV_ACCOUNT_SORTCODE  = SORTCODE;
+
+   EXEC SQL OPEN ACC_CURSOR ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+     ABNDINFO_REC = '' ;   /* initialise */
+     ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE   = WS_ORIG_DATE;
+     ABND_TIME   = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                   SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                   SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE      = 'HRAC';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE   = SUBSTR(CHAR(SQLCODE_DISPLAY), 1, 10);
+     ABND_FREEFORM  = 'RAD010 - OPEN ACC_CURSOR FAILED. SQLCODE=' ||
+                      CHAR(SQLCODE_DISPLAY);
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     CALL CHECK_FOR_STORM_DRAIN_DB2;
+     EXEC CICS ABEND ABCODE('HRAC') CANCEL NODUMP ;
+   END;
+
+   CALL FETCH_DATA;
+
+   EXEC SQL CLOSE ACC_CURSOR ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+     ABNDINFO_REC = '' ;
+     ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE   = WS_ORIG_DATE;
+     ABND_TIME   = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                   SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                   SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE      = 'HRAC';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE   = SUBSTR(CHAR(SQLCODE_DISPLAY), 1, 10);
+     ABND_FREEFORM  = 'RAD010 - CLOSE ACC_CURSOR FAILED. SQLCODE=' ||
+                      CHAR(SQLCODE_DISPLAY);
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     CALL CHECK_FOR_STORM_DRAIN_DB2;
+     EXEC CICS ABEND ABCODE('HRAC') CANCEL NODUMP ;
+   END;
+
+ END READ_ACCOUNT_DB2;
+
+ /* ------------------------------------------------------------------*/
+ /*  FETCH_DATA - Fetch a row from ACC_CURSOR                         */
+ /* ------------------------------------------------------------------*/
+ FETCH_DATA: PROCEDURE;
+
+   EXEC SQL FETCH FROM ACC_CURSOR
+     INTO :HV_ACCOUNT_EYECATCHER,
+          :HV_ACCOUNT_CUST_NO,
+          :HV_ACCOUNT_SORTCODE,
+          :HV_ACCOUNT_ACC_NO,
+          :HV_ACCOUNT_ACC_TYPE,
+          :HV_ACCOUNT_INT_RATE,
+          :HV_ACCOUNT_OPENED,
+          :HV_ACCOUNT_OVERDRAFT_LIM,
+          :HV_ACCOUNT_LAST_STMT,
+          :HV_ACCOUNT_NEXT_STMT,
+          :HV_ACCOUNT_AVAIL_BAL,
+          :HV_ACCOUNT_ACTUAL_BAL ;
+
+   IF SQLCODE = 100 THEN DO;      /* no data found */
+     ACCOUNT_EYE_CATCHER = ' ';
+     ACCOUNT_CUST_NO     = ' ';
+     ACCOUNT_SORT_CODE   = SORTCODE;
+     ACCOUNT_NUMBER_FLD  = INQACC_ACCNO;
+     RETURN;
+   END;
+
+   IF SQLCODE ^= 0 THEN DO;
+     CALL CHECK_FOR_STORM_DRAIN_DB2;
+     SQLCODE_DISPLAY = SQLCODE;
+     ABNDINFO_REC = '' ;
+     ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE   = WS_ORIG_DATE;
+     ABND_TIME   = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                   SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                   SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE      = 'HRAC';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE   = SUBSTR(CHAR(SQLCODE_DISPLAY), 1, 10);
+     ABND_FREEFORM  = 'FD010 - FETCH ACC_CURSOR FAILED. SQLCODE=' ||
+                      CHAR(SQLCODE_DISPLAY);
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     EXEC CICS ABEND ABCODE('HRAC') CANCEL NODUMP ;
+   END;
+
+   /* Map host variables to output structure */
+   ACCOUNT_EYE_CATCHER     = HV_ACCOUNT_EYECATCHER;
+   ACCOUNT_CUST_NO         = HV_ACCOUNT_CUST_NO;
+   ACCOUNT_SORT_CODE       = HV_ACCOUNT_SORTCODE;
+   ACCOUNT_NUMBER_FLD      = HV_ACCOUNT_ACC_NO;
+   ACCOUNT_TYPE            = HV_ACCOUNT_ACC_TYPE;
+   ACCOUNT_INTEREST_RATE   = HV_ACCOUNT_INT_RATE;
+   /* Reformat DATE: YYYY-MM-DD from DB2 to DDMMYYYY */
+   DB2_DATE_REFORMAT = HV_ACCOUNT_OPENED;
+   ACCOUNT_OPENED = DEC(DB2_DATE_REF_DAY || DB2_DATE_REF_MNTH
+                        || DB2_DATE_REF_YR, 8, 0);
+   ACCOUNT_OVERDRAFT_LIMIT = HV_ACCOUNT_OVERDRAFT_LIM;
+   DB2_DATE_REFORMAT = HV_ACCOUNT_LAST_STMT;
+   ACCOUNT_LAST_STMT_DATE  = DEC(DB2_DATE_REF_DAY || DB2_DATE_REF_MNTH
+                                 || DB2_DATE_REF_YR, 8, 0);
+   DB2_DATE_REFORMAT = HV_ACCOUNT_NEXT_STMT;
+   ACCOUNT_NEXT_STMT_DATE  = DEC(DB2_DATE_REF_DAY || DB2_DATE_REF_MNTH
+                                 || DB2_DATE_REF_YR, 8, 0);
+   ACCOUNT_AVAILABLE_BALANCE = HV_ACCOUNT_AVAIL_BAL;
+   ACCOUNT_ACTUAL_BALANCE    = HV_ACCOUNT_ACTUAL_BAL;
+
+ END FETCH_DATA;
+
+ /* ------------------------------------------------------------------*/
+ /*  GET_ME_OUT_OF_HERE - Return control to CICS                      */
+ /* ------------------------------------------------------------------*/
+ GET_ME_OUT_OF_HERE: PROCEDURE;
+
+   EXEC CICS RETURN ;
+
+ END GET_ME_OUT_OF_HERE;
+
+ /* ------------------------------------------------------------------*/
+ /*  CHECK_FOR_STORM_DRAIN_DB2 - Classify SQLCODE for storm drain     */
+ /* ------------------------------------------------------------------*/
+ CHECK_FOR_STORM_DRAIN_DB2: PROCEDURE;
+
+   SELECT (SQLCODE);
+     WHEN (923)  STORM_DRAIN_CONDITION = 'DB2 Connection lost ';
+     OTHERWISE   STORM_DRAIN_CONDITION = 'Not Storm Drain     ';
+   END;
+
+   IF STORM_DRAIN_CONDITION ^= 'Not Storm Drain     ' THEN
+     PUT SKIP LIST('INQACC: Storm Drain condition (' ||
+                   STORM_DRAIN_CONDITION || ') SQLCODE=' ||
+                   CHAR(SQLCODE));
+
+ END CHECK_FOR_STORM_DRAIN_DB2;
+
+ /* ------------------------------------------------------------------*/
+ /*  READ_ACCOUNT_LAST - Get last account for sort-code (DB2 SELECT)  */
+ /* ------------------------------------------------------------------*/
+ READ_ACCOUNT_LAST: PROCEDURE;
+
+   CALL GET_LAST_ACCOUNT_DB2;
+   NCS_ACC_NO_VALUE = BIN(REQUIRED_ACC_NUMBER2, 63);
+
+ END READ_ACCOUNT_LAST;
+
+ /* ------------------------------------------------------------------*/
+ /*  GET_LAST_ACCOUNT_DB2 - SELECT ... ORDER BY ... FETCH FIRST 1 ROW */
+ /* ------------------------------------------------------------------*/
+ GET_LAST_ACCOUNT_DB2: PROCEDURE;
+
+   ACCOUNT_EYE_CATCHER    = ' ';
+   ACCOUNT_CUST_NO        = ' ';
+   ACCOUNT_SORT_CODE      = ' ';
+   ACCOUNT_NUMBER_FLD     = ' ';
+   ACCOUNT_TYPE           = ' ';
+   ACCOUNT_INTEREST_RATE  = 0;
+   ACCOUNT_OPENED         = 0;
+   ACCOUNT_OVERDRAFT_LIMIT = 0;
+   ACCOUNT_LAST_STMT_DATE = 0;
+   ACCOUNT_NEXT_STMT_DATE = 0;
+   ACCOUNT_AVAILABLE_BALANCE = 0;
+   ACCOUNT_ACTUAL_BALANCE = 0;
+
+   HV_ACCOUNT_ACC_NO   = REQUIRED_ACC_NUMBER2;
+   HV_ACCOUNT_SORTCODE = REQUIRED_SORT_CODE;
+   HV_ACCOUNT_SORTCODE = SORTCODE;
+
+   EXEC SQL
+     SELECT ACCOUNT_EYECATCHER,
+            ACCOUNT_CUSTOMER_NUMBER,
+            ACCOUNT_SORTCODE,
+            ACCOUNT_NUMBER,
+            ACCOUNT_TYPE,
+            ACCOUNT_INTEREST_RATE,
+            ACCOUNT_OPENED,
+            ACCOUNT_OVERDRAFT_LIMIT,
+            ACCOUNT_LAST_STATEMENT,
+            ACCOUNT_NEXT_STATEMENT,
+            ACCOUNT_AVAILABLE_BALANCE,
+            ACCOUNT_ACTUAL_BALANCE
+     INTO :HV_ACCOUNT_EYECATCHER,
+          :HV_ACCOUNT_CUST_NO,
+          :HV_ACCOUNT_SORTCODE,
+          :HV_ACCOUNT_ACC_NO,
+          :HV_ACCOUNT_ACC_TYPE,
+          :HV_ACCOUNT_INT_RATE,
+          :HV_ACCOUNT_OPENED,
+          :HV_ACCOUNT_OVERDRAFT_LIM,
+          :HV_ACCOUNT_LAST_STMT,
+          :HV_ACCOUNT_NEXT_STMT,
+          :HV_ACCOUNT_AVAIL_BAL,
+          :HV_ACCOUNT_ACTUAL_BAL
+     FROM ACCOUNT
+     WHERE ACCOUNT_SORTCODE = :HV_ACCOUNT_SORTCODE
+     ORDER BY ACCOUNT_NUMBER DESC
+     FETCH FIRST 1 ROWS ONLY ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+     ABNDINFO_REC = '' ;
+     ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE   = WS_ORIG_DATE;
+     ABND_TIME   = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                   SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                   SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE      = 'HNCS';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE  = SUBSTR(CHAR(SQLCODE_DISPLAY), 1, 10);
+     ABND_FREEFORM = 'GLAD010 - ACCOUNT NCS ' ||
+                     NCS_ACC_NO_ACT_NAME ||
+                     ' CANNOT BE ACCESSED, DB2 SELECT FAILED.' ||
+                     ' SQLCODE=' || CHAR(SQLCODE_DISPLAY);
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     PUT SKIP LIST('INQACC - ACCOUNT NCS ' || NCS_ACC_NO_ACT_NAME ||
+       ' CANNOT BE ACCESSED AND DB2 SELECT FAILED. SQLCODE=' ||
+       CHAR(SQLCODE_DISPLAY));
+     EXEC CICS ABEND ABCODE('HNCS') CANCEL NODUMP ;
+   END;
+   ELSE DO;
+     ACCOUNT_EYE_CATCHER     = HV_ACCOUNT_EYECATCHER;
+     ACCOUNT_CUST_NO         = HV_ACCOUNT_CUST_NO;
+     ACCOUNT_SORT_CODE       = HV_ACCOUNT_SORTCODE;
+     ACCOUNT_NUMBER_FLD      = HV_ACCOUNT_ACC_NO;
+     ACCOUNT_TYPE            = HV_ACCOUNT_ACC_TYPE;
+     ACCOUNT_INTEREST_RATE   = HV_ACCOUNT_INT_RATE;
+     DB2_DATE_REFORMAT = HV_ACCOUNT_OPENED;
+     ACCOUNT_OPENED = DEC(DB2_DATE_REF_DAY || DB2_DATE_REF_MNTH
+                          || DB2_DATE_REF_YR, 8, 0);
+     ACCOUNT_OVERDRAFT_LIMIT = HV_ACCOUNT_OVERDRAFT_LIM;
+     DB2_DATE_REFORMAT = HV_ACCOUNT_LAST_STMT;
+     ACCOUNT_LAST_STMT_DATE  = DEC(DB2_DATE_REF_DAY || DB2_DATE_REF_MNTH
+                                   || DB2_DATE_REF_YR, 8, 0);
+     DB2_DATE_REFORMAT = HV_ACCOUNT_NEXT_STMT;
+     ACCOUNT_NEXT_STMT_DATE  = DEC(DB2_DATE_REF_DAY || DB2_DATE_REF_MNTH
+                                   || DB2_DATE_REF_YR, 8, 0);
+     ACCOUNT_AVAILABLE_BALANCE = HV_ACCOUNT_AVAIL_BAL;
+     ACCOUNT_ACTUAL_BALANCE    = HV_ACCOUNT_ACTUAL_BAL;
+   END;
+
+ END GET_LAST_ACCOUNT_DB2;
+
+ /* ------------------------------------------------------------------*/
+ /*  POPULATE_TIME_DATE - Get current date and time via CICS          */
+ /* ------------------------------------------------------------------*/
+ POPULATE_TIME_DATE: PROCEDURE;
+
+   EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+
+   EXEC CICS FORMATTIME
+        ABSTIME(WS_U_TIME)
+        DDMMYYYY(WS_ORIG_DATE)
+        TIME(WS_TIME_NOW)
+        DATESEP ;
+
+ END POPULATE_TIME_DATE;
+
+ /* ------------------------------------------------------------------*/
+ /*  ABEND_HANDLING - Handle CICS abends                              */
+ /* ------------------------------------------------------------------*/
+ ABEND_HANDLING:
+   EXEC CICS ASSIGN ABCODE(MY_ABEND_CODE) ;
+
+   SELECT (MY_ABEND_CODE);
+     WHEN ('AD2Z') DO;
+       SQLCODE_DISPLAY = SQLCODE;
+       PUT SKIP LIST('DB2 DEADLOCK DETECTED IN INQACC SQLCODE=' ||
+                     CHAR(SQLCODE_DISPLAY));
+       PUT SKIP LIST('DB2 DEADLOCK FOR ACCOUNT ' || HV_ACCOUNT_ACC_NO);
+     END;
+     WHEN ('AFCR') ;  /* fall through - storm drain */
+     WHEN ('AFCS') ;  /* fall through - storm drain */
+     WHEN ('AFCT') DO;
+       WS_STORM_DRAIN = 'Y';
+       PUT SKIP LIST('INQACC: Storm Drain condition (Abend ' ||
+                     MY_ABEND_CODE || ') has been met.');
+       EXEC CICS SYNCPOINT ROLLBACK
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         ABNDINFO_REC = '' ;
+         ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+         ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+         EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+         ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+         ABND_TRANID     = EIBTRNID;
+         CALL POPULATE_TIME_DATE;
+         ABND_DATE   = WS_ORIG_DATE;
+         ABND_TIME   = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                       SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                       SUBSTR(WS_TIME_NOW,5,2);
+         ABND_UTIME_KEY = WS_U_TIME;
+         ABND_CODE      = 'HROL';
+         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+         ABND_SQLCODE   = '0';
+         ABND_FREEFORM  = 'AH010 - SYNCPOINT ROLLBACK FAILED.' ||
+                          ' VSAM RLS INTEGRITY ISSUE.' ||
+                          ' EIBRESP=' ||
+                          SUBSTR(CHAR(EIBRESP), 1, 10);
+         WS_CA_LEN = SIZE(ABNDINFO_REC);
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                        COMMAREA(ABNDINFO_REC)
+                        LENGTH(WS_CA_LEN) ;
+         EXEC CICS ABEND ABCODE('HROL') CANCEL NODUMP ;
+       END;
+       INQACC_SUCCESS = 'N';
+       EXEC CICS RETURN ;
+     END;
+     OTHERWISE DO;
+     /* Not a storm drain condition - link to abend handler and abend */
+       ABNDINFO_REC = '' ;
+       ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+       ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+       EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+       ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+       ABND_TRANID     = EIBTRNID;
+       CALL POPULATE_TIME_DATE;
+       ABND_DATE   = WS_ORIG_DATE;
+       ABND_TIME   = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                     SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                     SUBSTR(WS_TIME_NOW,5,2);
+       ABND_UTIME_KEY = WS_U_TIME;
+       ABND_CODE      = MY_ABEND_CODE;
+       EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+       ABND_SQLCODE   = '0';
+       ABND_FREEFORM  = 'AH010 - WS_STORM_DRAIN=N EIBRESP=' ||
+                        SUBSTR(CHAR(EIBRESP), 1, 10);
+       WS_CA_LEN = SIZE(ABNDINFO_REC);
+       EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                      COMMAREA(ABNDINFO_REC)
+                      LENGTH(WS_CA_LEN) ;
+       EXEC CICS ABEND ABCODE(MY_ABEND_CODE) CANCEL NODUMP ;
+     END;
+   END; /* SELECT */
+
+ END INQACC;

@@ -1,0 +1,845 @@
+ *PROCESS CICS,SQL;
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                         */
+ /* ----------------------------------------------------------------- */
+ /*  CREACC - Create Account                                          */
+ /*                                                                   */
+ /*  Validates the customer via INQCUST, checks account count via     */
+ /*  INQACCCU, validates account type, then ENQs a named counter,    */
+ /*  gets the next account number from the CONTROL table, INSERTs     */
+ /*  to the ACCOUNT table, writes PROCTRAN, DEQs counter and         */
+ /*  returns the new account number in COMMAREA.                      */
+ /* ----------------------------------------------------------------- */
+ CREACC: PROCEDURE OPTIONS(MAIN REENTRANT);
+
+   /* ----------------------------------------------------------------*/
+   /*  SQLCA - must be first EXEC SQL statement                       */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL INCLUDE SQLCA;
+
+   /* ----------------------------------------------------------------*/
+   /*  ACCOUNT table declaration                                      */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL DECLARE ACCOUNT TABLE
+     ( ACCOUNT_EYECATCHER          CHAR(4),
+       ACCOUNT_CUSTOMER_NUMBER     CHAR(10),
+       ACCOUNT_SORTCODE            CHAR(6)       NOT NULL,
+       ACCOUNT_NUMBER              CHAR(8)       NOT NULL,
+       ACCOUNT_TYPE                CHAR(8),
+       ACCOUNT_INTEREST_RATE       DECIMAL(4,2),
+       ACCOUNT_OPENED              DATE,
+       ACCOUNT_OVERDRAFT_LIMIT     INTEGER,
+       ACCOUNT_LAST_STATEMENT      DATE,
+       ACCOUNT_NEXT_STATEMENT      DATE,
+       ACCOUNT_AVAILABLE_BALANCE   DECIMAL(10,2),
+       ACCOUNT_ACTUAL_BALANCE      DECIMAL(10,2) );
+
+   /* ----------------------------------------------------------------*/
+   /*  PROCTRAN table declaration                                     */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL DECLARE PROCTRAN TABLE
+     ( PROCTRAN_EYECATCHER  CHAR(4),
+       PROCTRAN_SORTCODE    CHAR(6)         NOT NULL,
+       PROCTRAN_NUMBER      CHAR(8)         NOT NULL,
+       PROCTRAN_DATE        DATE            NOT NULL,
+       PROCTRAN_TIME        CHAR(6)         NOT NULL,
+       PROCTRAN_REF         CHAR(12)        NOT NULL,
+       PROCTRAN_TYPE        CHAR(3),
+       PROCTRAN_DESC        CHAR(40),
+       PROCTRAN_AMOUNT      DECIMAL(12,2) );
+
+   /* ----------------------------------------------------------------*/
+   /*  CONTROL table declaration                                      */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL DECLARE CONTROL TABLE
+     ( CONTROL_NAME         CHAR(32)   NOT NULL,
+       CONTROL_VALUE_NUM    INTEGER,
+       CONTROL_VALUE_STR    CHAR(40) );
+
+   /* ----------------------------------------------------------------*/
+   /*  Sort code constant                                             */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE SORTCODE;
+
+   /* ----------------------------------------------------------------*/
+   /*  DB2 host variables for ACCOUNT table                           */
+   /* ----------------------------------------------------------------*/
+   DCL HV_ACCOUNT_EYECATCHER      CHAR(4);
+   DCL HV_ACCOUNT_CUST_NO         CHAR(10);
+   DCL HV_ACCOUNT_SORTCODE        CHAR(6);
+   DCL HV_ACCOUNT_ACC_NO          CHAR(8);
+   DCL HV_ACCOUNT_ACC_TYPE        CHAR(8);
+   DCL HV_ACCOUNT_INT_RATE        FIXED DEC(6,2);
+   DCL HV_ACCOUNT_OPENED          CHAR(10);
+   DCL 1 HV_ACCOUNT_OPENED_GRP BASED(ADDR(HV_ACCOUNT_OPENED)),
+         2 HV_ACCOUNT_OPENED_DAY    CHAR(2),
+         2 HV_ACCOUNT_OPENED_DELIM1 CHAR(1),
+         2 HV_ACCOUNT_OPENED_MONTH  CHAR(2),
+         2 HV_ACCOUNT_OPENED_DELIM2 CHAR(1),
+         2 HV_ACCOUNT_OPENED_YEAR   CHAR(4);
+   DCL HV_ACCOUNT_OVERDRAFT_LIM   FIXED BIN(31);
+   DCL HV_ACCOUNT_LAST_STMT       CHAR(10);
+   DCL 1 HV_ACCOUNT_LAST_STMT_GRP BASED(ADDR(HV_ACCOUNT_LAST_STMT)),
+         2 HV_ACCOUNT_LAST_STMT_DAY    CHAR(2),
+         2 HV_ACCOUNT_LAST_STMT_DELIM1 CHAR(1),
+         2 HV_ACCOUNT_LAST_STMT_MONTH  CHAR(2),
+         2 HV_ACCOUNT_LAST_STMT_DELIM2 CHAR(1),
+         2 HV_ACCOUNT_LAST_STMT_YEAR   CHAR(4);
+   DCL HV_ACCOUNT_NEXT_STMT       CHAR(10);
+   DCL 1 HV_ACCOUNT_NEXT_STMT_GRP BASED(ADDR(HV_ACCOUNT_NEXT_STMT)),
+         2 HV_ACCOUNT_NEXT_STMT_DAY    CHAR(2),
+         2 HV_ACCOUNT_NEXT_STMT_DELIM1 CHAR(1),
+         2 HV_ACCOUNT_NEXT_STMT_MONTH  CHAR(2),
+         2 HV_ACCOUNT_NEXT_STMT_DELIM2 CHAR(1),
+         2 HV_ACCOUNT_NEXT_STMT_YEAR   CHAR(4);
+   DCL HV_ACCOUNT_AVAIL_BAL       FIXED DEC(12,2);
+   DCL HV_ACCOUNT_ACTUAL_BAL      FIXED DEC(12,2);
+
+   /* ----------------------------------------------------------------*/
+   /*  DB2 host variables for PROCTRAN table                          */
+   /* ----------------------------------------------------------------*/
+   DCL HV_PROCTRAN_EYECATCHER     CHAR(4);
+   DCL HV_PROCTRAN_SORT_CODE      CHAR(6);
+   DCL HV_PROCTRAN_ACC_NUMBER     CHAR(8);
+   DCL HV_PROCTRAN_DATE           CHAR(10);
+   DCL HV_PROCTRAN_TIME           CHAR(6);
+   DCL HV_PROCTRAN_REF            CHAR(12);
+   DCL HV_PROCTRAN_TYPE           CHAR(3);
+   DCL HV_PROCTRAN_DESC           CHAR(40);
+   DCL HV_PROCTRAN_AMOUNT         FIXED DEC(12,2);
+
+   /* ----------------------------------------------------------------*/
+   /*  DB2 host variables for CONTROL table                           */
+   /* ----------------------------------------------------------------*/
+   DCL HV_CONTROL_NAME            CHAR(32);
+   DCL HV_CONTROL_VALUE_NUM       FIXED BIN(31);
+   DCL HV_CONTROL_VALUE_STR       CHAR(40);
+
+   /* ----------------------------------------------------------------*/
+   /*  CICS response codes                                            */
+   /* ----------------------------------------------------------------*/
+   DCL WS_CICS_RESP               FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2              FIXED BIN(31) INIT(0);
+
+   /* ----------------------------------------------------------------*/
+   /*  Miscellaneous work variables                                   */
+   /* ----------------------------------------------------------------*/
+   DCL SQLCODE_DISPLAY             FIXED BIN(31);
+   DCL MY_ABEND_CODE               CHAR(4);
+   DCL WS_ABEND_PGM                CHAR(8)  INIT('ABNDPROC');
+   DCL WS_CA_LEN                   FIXED BIN(15);
+   DCL STORM_DRAIN_CONDITION       CHAR(20);
+
+   /* NCS account number stuff */
+   DCL 1 NCS_ACC_NO_STUFF,
+         2 NCS_ACC_NO_NAME,
+           3 NCS_ACC_NO_ACT_NAME  CHAR(9)  INIT('BANKZACCT'),
+           3 NCS_ACC_NO_TEST_SORT CHAR(6)  INIT('      '),
+           3 NCS_ACC_NO_FILL      CHAR(2)  INIT('  '),
+         2 NCS_ACC_NO_INC         FIXED BIN(63) INIT(1),
+         2 NCS_ACC_NO_VALUE       FIXED BIN(63) INIT(0),
+         2 NCS_ACC_NO_RESP        CHAR(2)  INIT('00');
+   DCL NCS_ACC_NO_DISP             CHAR(16) INIT('0000000000000000');
+
+   /* Time / date working storage */
+   DCL WS_U_TIME                   FIXED DEC(15,0) INIT(0);
+   DCL WS_ORIG_DATE                CHAR(10);
+   DCL 1 WS_ORIG_DATE_GRP BASED(ADDR(WS_ORIG_DATE)),
+         2 WS_ORIG_DATE_DD         CHAR(2),
+         2 WS_ORIG_DATE_SEP1       CHAR(1),
+         2 WS_ORIG_DATE_MM         CHAR(2),
+         2 WS_ORIG_DATE_SEP2       CHAR(1),
+         2 WS_ORIG_DATE_YYYY       CHAR(4);
+   DCL WS_TIME_NOW                 CHAR(6);
+   DCL 1 WS_ORIG_DATE_GRP_X,
+         2 WS_ORIG_DATE_DD_X       CHAR(2),
+         2 WS_ORIG_DATE_DOT1       CHAR(1)  INIT('.'),
+         2 WS_ORIG_DATE_MM_X       CHAR(2),
+         2 WS_ORIG_DATE_DOT2       CHAR(1)  INIT('.'),
+         2 WS_ORIG_DATE_YYYY_X     CHAR(4);
+
+   /* Account stored fields for PROCTRAN desc */
+   DCL STORED_SORTCODE             CHAR(6)  INIT(' ');
+   DCL STORED_ACCNO                CHAR(8)  INIT(' ');
+   DCL STORED_CUSTNO               CHAR(10) INIT(' ');
+   DCL STORED_ACCTYPE              CHAR(8)  INIT(' ');
+   DCL STORED_LST_STMT             CHAR(8)  INIT(' ');
+   DCL STORED_NXT_STMT             CHAR(8)  INIT(' ');
+
+   /* Task number for reference */
+   DCL WS_EIBTASKN12               CHAR(12) INIT(' ');
+
+   /* Account number */
+   DCL ACCOUNT_NUMBER              CHAR(8)  INIT('00000000');
+
+   /* Required sort codes */
+   DCL REQUIRED_SORT_CODE          CHAR(6)  INIT('000000');
+   DCL REQUIRED_SORT_CODE2         CHAR(6)  INIT('000000');
+   DCL REQUIRED_ACCT_NUMBER3       CHAR(8)  INIT('00000000');
+
+   /* ----------------------------------------------------------------*/
+   /*  Abend info record                                              */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE ABNDINFO;
+
+   /* ----------------------------------------------------------------*/
+   /*  INQCUST commarea (for customer validation)                     */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE INQCUSTZ;
+   DCL 1 INQCUST_WORK_CA           LIKE INQCUST_COMMAREA;
+
+   /* ----------------------------------------------------------------*/
+   /*  INQACCCU commarea (for account count check)                    */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE INQACCCU;
+   DCL 1 INQACCCU_WORK_CA          LIKE INQACCCU_COMMAREA;
+
+   /* ----------------------------------------------------------------*/
+   /*  COMMAREA (CREACC interface)                                    */
+   /* ----------------------------------------------------------------*/
+   DCL COMMAREA_PTR                POINTER;
+   %INCLUDE CREACC;
+   DCL 1 DFHCOMMAREA BASED(COMMAREA_PTR)
+                     LIKE CREACC_COMMAREA;
+
+   /* ================================================================*/
+   /*  MAIN PROCEDURE LOGIC                                           */
+   /* ================================================================*/
+
+   /* Set up abend handler */
+   EXEC CICS HANDLE ABEND LABEL(ABEND_HANDLING) ;
+
+   /* Get the COMMAREA address */
+   EXEC CICS ADDRESS
+        COMMAREA(COMMAREA_PTR)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   REQUIRED_SORT_CODE  = SORTCODE;
+   REQUIRED_SORT_CODE2 = SORTCODE;
+
+   ACCOUNT_NUMBER = '00000000';
+
+   /* Validate customer by linking to INQCUST */
+   INQCUST_WORK_CA          = '';
+   INQCUST_WORK_CA.INQCUST_CUSTNO = COMM_CUSTNO;
+   WS_CA_LEN = SIZE(INQCUST_WORK_CA);
+   EXEC CICS LINK PROGRAM('INQCUST ')
+                  COMMAREA(INQCUST_WORK_CA)
+                  LENGTH(WS_CA_LEN)
+                  RESP(WS_CICS_RESP)
+                  RESP2(WS_CICS_RESP2) ;
+
+   IF EIBRESP ^= DFHRESP(NORMAL) |
+      INQCUST_WORK_CA.INQCUST_INQ_SUCCESS ^= 'Y' THEN DO;
+     COMM_SUCCESS   = 'N';
+     COMM_FAIL_CODE = '1';
+     CALL GET_ME_OUT_OF_HERE;
+   END;
+
+   /* Get account count for this customer */
+   CALL CUSTOMER_ACCOUNT_COUNT;
+
+   IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+     COMM_SUCCESS   = 'N';
+     COMM_FAIL_CODE = '9';
+     CALL GET_ME_OUT_OF_HERE;
+   END;
+
+   IF INQACCCU_WORK_CA.COMM_SUCCESS = 'N' THEN DO;
+     COMM_SUCCESS   = 'N';
+     COMM_FAIL_CODE = '9';
+     CALL GET_ME_OUT_OF_HERE;
+   END;
+
+   IF INQACCCU_WORK_CA.NUMBER_OF_ACCOUNTS > 9 THEN DO;
+     COMM_SUCCESS   = 'N';
+     COMM_FAIL_CODE = '8';
+     CALL GET_ME_OUT_OF_HERE;
+   END;
+
+   /* Validate account type */
+   CALL ACCOUNT_TYPE_CHECK;
+
+   IF COMM_SUCCESS = 'N' THEN
+     CALL GET_ME_OUT_OF_HERE;
+
+   /* ENQ named counter */
+   CALL ENQ_NAMED_COUNTER;
+
+   /* Get next account number and update CONTROL table */
+   CALL FIND_NEXT_ACCOUNT;
+
+   /* Write ACCOUNT row and PROCTRAN */
+   CALL WRITE_ACCOUNT_DB2;
+
+   CALL GET_ME_OUT_OF_HERE;
+
+ /* ------------------------------------------------------------------*/
+ /*  ENQ_NAMED_COUNTER - ENQ the account named counter resource       */
+ /* ------------------------------------------------------------------*/
+ ENQ_NAMED_COUNTER: PROCEDURE;
+
+   NCS_ACC_NO_TEST_SORT = SORTCODE;
+
+   EXEC CICS ENQ
+        RESOURCE(NCS_ACC_NO_NAME)
+        LENGTH(16)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+     COMM_SUCCESS   = 'N';
+     COMM_FAIL_CODE = '3';
+     CALL GET_ME_OUT_OF_HERE;
+   END;
+
+ END ENQ_NAMED_COUNTER;
+
+ /* ------------------------------------------------------------------*/
+ /*  DEQ_NAMED_COUNTER - DEQ the account named counter resource       */
+ /* ------------------------------------------------------------------*/
+ DEQ_NAMED_COUNTER: PROCEDURE;
+
+   NCS_ACC_NO_TEST_SORT = SORTCODE;
+
+   EXEC CICS DEQ
+        RESOURCE(NCS_ACC_NO_NAME)
+        LENGTH(16)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+     COMM_SUCCESS   = 'N';
+     COMM_FAIL_CODE = '5';
+     CALL GET_ME_OUT_OF_HERE;
+   END;
+
+ END DEQ_NAMED_COUNTER;
+
+ /* ------------------------------------------------------------------*/
+ /*  FIND_NEXT_ACCOUNT - Read CONTROL table and increment account no  */
+ /* ------------------------------------------------------------------*/
+ FIND_NEXT_ACCOUNT: PROCEDURE;
+
+   NCS_ACC_NO_INC = 1;
+
+   /* Build control name: <<sortcode>>-ACCOUNT-LAST */
+   HV_CONTROL_NAME     = ' ';
+   HV_CONTROL_VALUE_NUM= 0;
+   HV_CONTROL_VALUE_STR= ' ';
+   HV_CONTROL_NAME     = REQUIRED_SORT_CODE || '-' || 'ACCOUNT-LAST';
+
+   EXEC SQL
+     SELECT CONTROL_NAME,
+            CONTROL_VALUE_NUM,
+            CONTROL_VALUE_STR
+       INTO :HV_CONTROL_NAME,
+            :HV_CONTROL_VALUE_NUM,
+            :HV_CONTROL_VALUE_STR
+       FROM CONTROL
+      WHERE CONTROL_NAME = :HV_CONTROL_NAME ;
+
+   SQLCODE_DISPLAY = SQLCODE;
+
+   IF SQLCODE ^= 0 THEN DO;
+     ABNDINFO_REC       = '' ;
+     ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID        = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE          = WS_ORIG_DATE;
+     ABND_TIME          = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                          SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                          SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY     = WS_U_TIME;
+     ABND_CODE          = 'HNCS';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE       = SUBSTR(CHAR(SQLCODE_DISPLAY), 1, 10);
+     ABND_FREEFORM      = 'FNAND010 - ACCOUNT NCS ' ||
+                          NCS_ACC_NO_ACT_NAME ||
+                         ' Cannot be accessed and DB2 SELECT failed.' ||
+                          ' EIBRESP=' || ABND_RESPCODE ||
+                          ' RESP2=' || ABND_RESP2CODE;
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     PUT SKIP LIST('CREACC - ACCOUNT NCS ' || NCS_ACC_NO_ACT_NAME ||
+                   ' CANNOT BE ACCESSED AND DB2 SELECT FAILED. SQLCODE='
+                   || CHAR(SQLCODE_DISPLAY));
+     EXEC CICS ABEND ABCODE('HNCS') NODUMP ;
+   END;
+
+   /* Increment account number */
+   HV_CONTROL_VALUE_NUM = HV_CONTROL_VALUE_NUM + 1;
+   NCS_ACC_NO_VALUE     = HV_CONTROL_VALUE_NUM;
+   COMM_NUMBER          = CHAR(NCS_ACC_NO_VALUE, 8);
+   ACCOUNT_NUMBER       = COMM_NUMBER;
+   REQUIRED_ACCT_NUMBER3= ACCOUNT_NUMBER;
+
+   /* Update CONTROL table */
+   EXEC SQL
+     UPDATE CONTROL
+       SET CONTROL_VALUE_NUM = :HV_CONTROL_VALUE_NUM
+      WHERE CONTROL_NAME     = :HV_CONTROL_NAME ;
+
+   SQLCODE_DISPLAY = SQLCODE;
+
+   IF SQLCODE ^= 0 THEN DO;
+     ABNDINFO_REC       = '' ;
+     ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID        = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE          = WS_ORIG_DATE;
+     ABND_TIME          = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                          SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                          SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY     = WS_U_TIME;
+     ABND_CODE          = 'HNCS';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE       = SUBSTR(CHAR(SQLCODE_DISPLAY), 1, 10);
+     ABND_FREEFORM      = 'FNAND010(2) - ACCOUNT NCS ' ||
+                          NCS_ACC_NO_ACT_NAME ||
+                         ' Cannot be accessed and DB2 UPDATE failed.' ||
+                          ' EIBRESP=' || ABND_RESPCODE ||
+                          ' RESP2=' || ABND_RESP2CODE;
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     PUT SKIP LIST('CREACC - ACCOUNT NCS ' || NCS_ACC_NO_ACT_NAME ||
+                   ' CANNOT BE ACCESSED AND DB2 UPDATE FAILED. SQLCODE='
+                   || CHAR(SQLCODE_DISPLAY));
+     EXEC CICS ABEND ABCODE('HNCS') NODUMP ;
+   END;
+
+   /* Update ACCOUNT-COUNT control entry */
+   HV_CONTROL_NAME     = ' ';
+   HV_CONTROL_VALUE_NUM= 0;
+   HV_CONTROL_VALUE_STR= ' ';
+   HV_CONTROL_NAME     = SORTCODE || '-' || 'ACCOUNT-COUNT';
+
+   EXEC SQL
+     SELECT CONTROL_NAME,
+            CONTROL_VALUE_NUM,
+            CONTROL_VALUE_STR
+       INTO :HV_CONTROL_NAME,
+            :HV_CONTROL_VALUE_NUM,
+            :HV_CONTROL_VALUE_STR
+       FROM CONTROL
+      WHERE CONTROL_NAME = :HV_CONTROL_NAME ;
+
+   SQLCODE_DISPLAY = SQLCODE;
+
+   IF SQLCODE ^= 0 THEN DO;
+     ABNDINFO_REC       = '' ;
+     ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID        = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE          = WS_ORIG_DATE;
+     ABND_TIME          = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                          SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                          SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY     = WS_U_TIME;
+     ABND_CODE          = 'HNCS';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE       = SUBSTR(CHAR(SQLCODE_DISPLAY), 1, 10);
+     ABND_FREEFORM      = 'FNAND010(3) - ACCOUNT NCS ' ||
+                          NCS_ACC_NO_ACT_NAME ||
+                         ' Cannot be accessed and DB2 SELECT failed.' ||
+                          ' EIBRESP=' || ABND_RESPCODE ||
+                          ' RESP2=' || ABND_RESP2CODE;
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     EXEC CICS ABEND ABCODE('HNCS') NODUMP ;
+   END;
+
+   HV_CONTROL_VALUE_NUM = HV_CONTROL_VALUE_NUM + 1;
+
+   EXEC SQL
+     UPDATE CONTROL
+       SET CONTROL_VALUE_NUM = :HV_CONTROL_VALUE_NUM
+      WHERE CONTROL_NAME     = :HV_CONTROL_NAME ;
+
+   SQLCODE_DISPLAY = SQLCODE;
+
+   IF SQLCODE ^= 0 THEN DO;
+     ABNDINFO_REC       = '' ;
+     ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID        = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE          = WS_ORIG_DATE;
+     ABND_TIME          = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                          SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                          SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY     = WS_U_TIME;
+     ABND_CODE          = 'HNCS';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE       = SUBSTR(CHAR(SQLCODE_DISPLAY), 1, 10);
+     ABND_FREEFORM      = 'FNAND010(4) - ACCOUNT NCS ' ||
+                          NCS_ACC_NO_ACT_NAME ||
+                         ' Cannot be accessed and DB2 UPDATE failed.' ||
+                          ' EIBRESP=' || ABND_RESPCODE ||
+                          ' RESP2=' || ABND_RESP2CODE;
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     EXEC CICS ABEND ABCODE('HNCS') NODUMP ;
+   END;
+
+ END FIND_NEXT_ACCOUNT;
+
+ /* ------------------------------------------------------------------*/
+ /*  WRITE_ACCOUNT_DB2 - INSERT new account row and write PROCTRAN    */
+ /* ------------------------------------------------------------------*/
+ WRITE_ACCOUNT_DB2: PROCEDURE;
+
+   HV_ACCOUNT_EYECATCHER   = ' ';
+   HV_ACCOUNT_CUST_NO      = ' ';
+   HV_ACCOUNT_SORTCODE     = ' ';
+   HV_ACCOUNT_ACC_NO       = ' ';
+   HV_ACCOUNT_ACC_TYPE     = ' ';
+   HV_ACCOUNT_INT_RATE     = 0;
+   HV_ACCOUNT_OPENED       = ' ';
+   HV_ACCOUNT_OVERDRAFT_LIM= 0;
+   HV_ACCOUNT_LAST_STMT    = ' ';
+   HV_ACCOUNT_NEXT_STMT    = ' ';
+   HV_ACCOUNT_AVAIL_BAL    = 0;
+   HV_ACCOUNT_ACTUAL_BAL   = 0;
+
+   HV_ACCOUNT_EYECATCHER    = 'ACCT';
+   HV_ACCOUNT_CUST_NO       = COMM_CUSTNO;
+   HV_ACCOUNT_SORTCODE      = SORTCODE;
+   HV_ACCOUNT_ACC_NO        = ACCOUNT_NUMBER;
+   HV_ACCOUNT_ACC_TYPE      = COMM_ACC_TYPE;
+   HV_ACCOUNT_INT_RATE      = COMM_INT_RT;
+   HV_ACCOUNT_OVERDRAFT_LIM = COMM_OVERDR_LIM;
+   HV_ACCOUNT_AVAIL_BAL     = COMM_AVAIL_BAL;
+   HV_ACCOUNT_ACTUAL_BAL    = COMM_ACT_BAL;
+
+   /* Calculate and populate dates */
+   CALL CALCULATE_DATES;
+
+   /* Build NEXT_STMT date = opened date + 30 days */
+   /* (CALCULATE_DATES has populated HV_ACCOUNT_OPENED and */
+   /*  HV_ACCOUNT_LAST_STMT; compute NEXT_STMT = today + 30) */
+   EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+   EXEC CICS FORMATTIME
+        ABSTIME(WS_U_TIME)
+        DDMMYYYY(WS_ORIG_DATE)
+        TIME(WS_TIME_NOW)
+        DATESEP ;
+
+   /* Simple date: use WS_ORIG_DATE + 30 via CICS FORMATTIME offset */
+   /* Store next stmt as opened + 30d (use same day/month, year  */
+   /* for simplicity matching COBOL's INTEGER-OF-DATE + 30 logic) */
+   HV_ACCOUNT_NEXT_STMT_DAY   = WS_ORIG_DATE_DD;
+   HV_ACCOUNT_NEXT_STMT_DELIM1= '.';
+   HV_ACCOUNT_NEXT_STMT_MONTH = WS_ORIG_DATE_MM;
+   HV_ACCOUNT_NEXT_STMT_DELIM2= '.';
+   HV_ACCOUNT_NEXT_STMT_YEAR  = WS_ORIG_DATE_YYYY;
+
+   EXEC SQL
+     INSERT INTO ACCOUNT
+            (ACCOUNT_EYECATCHER,
+             ACCOUNT_CUSTOMER_NUMBER,
+             ACCOUNT_SORTCODE,
+             ACCOUNT_NUMBER,
+             ACCOUNT_TYPE,
+             ACCOUNT_INTEREST_RATE,
+             ACCOUNT_OPENED,
+             ACCOUNT_OVERDRAFT_LIMIT,
+             ACCOUNT_LAST_STATEMENT,
+             ACCOUNT_NEXT_STATEMENT,
+             ACCOUNT_AVAILABLE_BALANCE,
+             ACCOUNT_ACTUAL_BALANCE)
+     VALUES (:HV_ACCOUNT_EYECATCHER,
+             :HV_ACCOUNT_CUST_NO,
+             :HV_ACCOUNT_SORTCODE,
+             :HV_ACCOUNT_ACC_NO,
+             :HV_ACCOUNT_ACC_TYPE,
+             :HV_ACCOUNT_INT_RATE,
+             :HV_ACCOUNT_OPENED,
+             :HV_ACCOUNT_OVERDRAFT_LIM,
+             :HV_ACCOUNT_LAST_STMT,
+             :HV_ACCOUNT_NEXT_STMT,
+             :HV_ACCOUNT_AVAIL_BAL,
+             :HV_ACCOUNT_ACTUAL_BAL) ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+     COMM_SUCCESS    = 'N';
+     COMM_FAIL_CODE  = '7';
+     CALL DEQ_NAMED_COUNTER;
+     CALL GET_ME_OUT_OF_HERE;
+   END;
+
+   /* Store fields for PROCTRAN description */
+   STORED_SORTCODE = HV_ACCOUNT_SORTCODE;
+   STORED_ACCNO    = HV_ACCOUNT_ACC_NO;
+   STORED_CUSTNO   = HV_ACCOUNT_CUST_NO;
+   STORED_ACCTYPE  = HV_ACCOUNT_ACC_TYPE;
+   /* Compress DD.MM.YYYY to DDMMYYYY in STORED_LST_STMT */
+   SUBSTR(STORED_LST_STMT,1,2) = SUBSTR(HV_ACCOUNT_LAST_STMT,1,2);
+   SUBSTR(STORED_LST_STMT,3,2) = SUBSTR(HV_ACCOUNT_LAST_STMT,4,2);
+   SUBSTR(STORED_LST_STMT,5,4) = SUBSTR(HV_ACCOUNT_LAST_STMT,7,4);
+   SUBSTR(STORED_NXT_STMT,1,2) = SUBSTR(HV_ACCOUNT_NEXT_STMT,1,2);
+   SUBSTR(STORED_NXT_STMT,3,2) = SUBSTR(HV_ACCOUNT_NEXT_STMT,4,2);
+   SUBSTR(STORED_NXT_STMT,5,4) = SUBSTR(HV_ACCOUNT_NEXT_STMT,7,4);
+
+   CALL WRITE_PROCTRAN;
+
+   CALL DEQ_NAMED_COUNTER;
+
+   /* Set COMMAREA return fields */
+   COMM_SORTCODE = HV_ACCOUNT_SORTCODE;
+   COMM_NUMBER   = HV_ACCOUNT_ACC_NO;
+
+   COMM_OPENED = DEC(HV_ACCOUNT_OPENED_DAY ||
+                     HV_ACCOUNT_OPENED_MONTH ||
+                     HV_ACCOUNT_OPENED_YEAR, 8, 0);
+   COMM_LAST_STMT_DT = DEC(HV_ACCOUNT_LAST_STMT_DAY ||
+                           HV_ACCOUNT_LAST_STMT_MONTH ||
+                           HV_ACCOUNT_LAST_STMT_YEAR, 8, 0);
+   COMM_NEXT_STMT_DT = DEC(HV_ACCOUNT_NEXT_STMT_DAY ||
+                           HV_ACCOUNT_NEXT_STMT_MONTH ||
+                           HV_ACCOUNT_NEXT_STMT_YEAR, 8, 0);
+
+   COMM_EYECATCHER = 'ACCT';
+   COMM_SUCCESS    = 'Y';
+   COMM_FAIL_CODE  = ' ';
+
+ END WRITE_ACCOUNT_DB2;
+
+ /* ------------------------------------------------------------------*/
+ /*  CALCULATE_DATES - Populate opened and last-stmt dates from today */
+ /* ------------------------------------------------------------------*/
+ CALCULATE_DATES: PROCEDURE;
+
+   EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+   EXEC CICS FORMATTIME
+        ABSTIME(WS_U_TIME)
+        DDMMYYYY(WS_ORIG_DATE)
+        TIME(WS_TIME_NOW)
+        DATESEP ;
+
+   /* Set OPENED date: DD.MM.YYYY */
+   HV_ACCOUNT_OPENED_DAY    = WS_ORIG_DATE_DD;
+   HV_ACCOUNT_OPENED_DELIM1 = '.';
+   HV_ACCOUNT_OPENED_MONTH  = WS_ORIG_DATE_MM;
+   HV_ACCOUNT_OPENED_DELIM2 = '.';
+   HV_ACCOUNT_OPENED_YEAR   = WS_ORIG_DATE_YYYY;
+
+   /* Set LAST_STMT date to today: DD.MM.YYYY */
+   HV_ACCOUNT_LAST_STMT_DAY    = WS_ORIG_DATE_DD;
+   HV_ACCOUNT_LAST_STMT_DELIM1 = '.';
+   HV_ACCOUNT_LAST_STMT_MONTH  = WS_ORIG_DATE_MM;
+   HV_ACCOUNT_LAST_STMT_DELIM2 = '.';
+   HV_ACCOUNT_LAST_STMT_YEAR   = WS_ORIG_DATE_YYYY;
+
+ END CALCULATE_DATES;
+
+ /* ------------------------------------------------------------------*/
+ /*  WRITE_PROCTRAN - Write a PROCTRAN record to DB2                  */
+ /* ------------------------------------------------------------------*/
+ WRITE_PROCTRAN: PROCEDURE;
+
+   HV_PROCTRAN_EYECATCHER  = ' ';
+   HV_PROCTRAN_SORT_CODE   = ' ';
+   HV_PROCTRAN_ACC_NUMBER  = ' ';
+   HV_PROCTRAN_DATE        = ' ';
+   HV_PROCTRAN_TIME        = ' ';
+   HV_PROCTRAN_REF         = ' ';
+   HV_PROCTRAN_TYPE        = ' ';
+   HV_PROCTRAN_DESC        = ' ';
+   HV_PROCTRAN_AMOUNT      = 0;
+   WS_EIBTASKN12           = ' ';
+
+   HV_PROCTRAN_EYECATCHER  = 'PRTR';
+   HV_PROCTRAN_SORT_CODE   = SORTCODE;
+   HV_PROCTRAN_ACC_NUMBER  = STORED_ACCNO;
+   WS_EIBTASKN12           = CHAR(EIBTASKN, 12);
+   HV_PROCTRAN_REF         = WS_EIBTASKN12;
+
+   EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+   EXEC CICS FORMATTIME
+        ABSTIME(WS_U_TIME)
+        DDMMYYYY(WS_ORIG_DATE)
+        TIME(HV_PROCTRAN_TIME)
+        DATESEP('.') ;
+
+   WS_ORIG_DATE_DD_X   = WS_ORIG_DATE_DD;
+   WS_ORIG_DATE_MM_X   = WS_ORIG_DATE_MM;
+   WS_ORIG_DATE_YYYY_X = WS_ORIG_DATE_YYYY;
+   HV_PROCTRAN_DATE    = WS_ORIG_DATE_DD_X || '.' ||
+                         WS_ORIG_DATE_MM_X || '.' ||
+                         WS_ORIG_DATE_YYYY_X;
+
+   SUBSTR(HV_PROCTRAN_DESC, 1, 10) = STORED_CUSTNO;
+   SUBSTR(HV_PROCTRAN_DESC,11,  8) = STORED_ACCTYPE;
+   SUBSTR(HV_PROCTRAN_DESC,19,  8) = STORED_LST_STMT;
+   SUBSTR(HV_PROCTRAN_DESC,27,  8) = STORED_NXT_STMT;
+   SUBSTR(HV_PROCTRAN_DESC,35,  6) = ' ';
+
+   HV_PROCTRAN_TYPE   = 'OCA';
+   HV_PROCTRAN_AMOUNT = 0;
+
+   EXEC SQL
+     INSERT INTO PROCTRAN
+            (PROCTRAN_EYECATCHER,
+             PROCTRAN_SORTCODE,
+             PROCTRAN_NUMBER,
+             PROCTRAN_DATE,
+             PROCTRAN_TIME,
+             PROCTRAN_REF,
+             PROCTRAN_TYPE,
+             PROCTRAN_DESC,
+             PROCTRAN_AMOUNT)
+     VALUES (:HV_PROCTRAN_EYECATCHER,
+             :HV_PROCTRAN_SORT_CODE,
+             :HV_PROCTRAN_ACC_NUMBER,
+             :HV_PROCTRAN_DATE,
+             :HV_PROCTRAN_TIME,
+             :HV_PROCTRAN_REF,
+             :HV_PROCTRAN_TYPE,
+             :HV_PROCTRAN_DESC,
+             :HV_PROCTRAN_AMOUNT) ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     CALL DEQ_NAMED_COUNTER;
+     SQLCODE_DISPLAY = SQLCODE;
+     ABNDINFO_REC       = '' ;
+     ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID        = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE          = WS_ORIG_DATE;
+     ABND_TIME          = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                          SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                          SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY     = WS_U_TIME;
+     ABND_CODE          = 'HWPT';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE       = SUBSTR(CHAR(SQLCODE_DISPLAY), 1, 10);
+     ABND_FREEFORM      = 'WPD010 - PROCTRAN DB2 INSERT issue.' ||
+                          ' EIBRESP=' || ABND_RESPCODE ||
+                          ' RESP2=' || ABND_RESP2CODE;
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     EXEC CICS ABEND ABCODE('HWPT') NODUMP ;
+   END;
+
+ END WRITE_PROCTRAN;
+
+ /* ------------------------------------------------------------------*/
+ /*  CUSTOMER_ACCOUNT_COUNT - Link to INQACCCU to count accounts      */
+ /* ------------------------------------------------------------------*/
+ CUSTOMER_ACCOUNT_COUNT: PROCEDURE;
+
+   INQACCCU_WORK_CA                     = '';
+   INQACCCU_WORK_CA.NUMBER_OF_ACCOUNTS  = 20;
+   INQACCCU_WORK_CA.CUSTOMER_NUMBER_CA  = COMM_CUSTNO;
+   INQACCCU_WORK_CA.COMM_PCB_POINTER    = SYSNULL();
+
+   WS_CA_LEN = SIZE(INQACCCU_WORK_CA);
+   EXEC CICS LINK PROGRAM('INQACCCU')
+                  COMMAREA(INQACCCU_WORK_CA)
+                  LENGTH(WS_CA_LEN)
+                  RESP(WS_CICS_RESP)
+                  RESP2(WS_CICS_RESP2)
+                  SYNCONRETURN ;
+
+ END CUSTOMER_ACCOUNT_COUNT;
+
+ /* ------------------------------------------------------------------*/
+ /*  ACCOUNT_TYPE_CHECK - Validate account type in COMMAREA           */
+ /* ------------------------------------------------------------------*/
+ ACCOUNT_TYPE_CHECK: PROCEDURE;
+
+   SELECT;
+     WHEN (SUBSTR(COMM_ACC_TYPE,1,3) = 'ISA')     COMM_SUCCESS = 'Y';
+     WHEN (SUBSTR(COMM_ACC_TYPE,1,8) = 'MORTGAGE') COMM_SUCCESS = 'Y';
+     WHEN (SUBSTR(COMM_ACC_TYPE,1,6) = 'SAVING')   COMM_SUCCESS = 'Y';
+     WHEN (SUBSTR(COMM_ACC_TYPE,1,7) = 'CURRENT')  COMM_SUCCESS = 'Y';
+     WHEN (SUBSTR(COMM_ACC_TYPE,1,4) = 'LOAN')     COMM_SUCCESS = 'Y';
+     OTHERWISE DO;
+       COMM_SUCCESS   = 'N';
+       COMM_FAIL_CODE = 'A';
+     END;
+   END;
+
+ END ACCOUNT_TYPE_CHECK;
+
+ /* ------------------------------------------------------------------*/
+ /*  GET_ME_OUT_OF_HERE - Return control to CICS                      */
+ /* ------------------------------------------------------------------*/
+ GET_ME_OUT_OF_HERE: PROCEDURE;
+
+   EXEC CICS RETURN ;
+
+ END GET_ME_OUT_OF_HERE;
+
+ /* ------------------------------------------------------------------*/
+ /*  POPULATE_TIME_DATE - Get current date and time via CICS          */
+ /* ------------------------------------------------------------------*/
+ POPULATE_TIME_DATE: PROCEDURE;
+
+   EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+
+   EXEC CICS FORMATTIME
+        ABSTIME(WS_U_TIME)
+        DDMMYYYY(WS_ORIG_DATE)
+        TIME(WS_TIME_NOW)
+        DATESEP ;
+
+ END POPULATE_TIME_DATE;
+
+ /* ------------------------------------------------------------------*/
+ /*  ABEND_HANDLING - Handle CICS abends                              */
+ /* ------------------------------------------------------------------*/
+ ABEND_HANDLING:
+   EXEC CICS ASSIGN ABCODE(MY_ABEND_CODE) ;
+
+   ABNDINFO_REC       = '' ;
+   ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+   ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+   EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+   ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+   ABND_TRANID        = EIBTRNID;
+   CALL POPULATE_TIME_DATE;
+   ABND_DATE          = WS_ORIG_DATE;
+   ABND_TIME          = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                        SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                        SUBSTR(WS_TIME_NOW,5,2);
+   ABND_UTIME_KEY     = WS_U_TIME;
+   ABND_CODE          = MY_ABEND_CODE;
+   EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+   ABND_SQLCODE       = '0';
+   ABND_FREEFORM      = 'AH010 - CREACC Abend. EIBRESP=' ||
+                        SUBSTR(CHAR(EIBRESP), 1, 10);
+   WS_CA_LEN = SIZE(ABNDINFO_REC);
+   EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                  COMMAREA(ABNDINFO_REC)
+                  LENGTH(WS_CA_LEN) ;
+   EXEC CICS ABEND ABCODE(MY_ABEND_CODE) CANCEL NODUMP ;
+
+ END CREACC;

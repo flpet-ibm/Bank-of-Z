@@ -1,0 +1,666 @@
+ *PROCESS CICS;
+ /* ------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                     */
+ /* ------------------------------------------------------------- */
+ /*  BNK1CRA - Credit/Debit program (BMS suite)                   */
+ /*  Converted from COBOL BNK1CRA.cbl                             */
+ /*  Applies a credit or debit to an account via DBCRFUN.         */
+ /* ------------------------------------------------------------- */
+ BNK1CRA: PROCEDURE OPTIONS(MAIN REENTRANT);
+
+   /* ----------------------------------------------------------- */
+   /*  BMS symbolic map include (BNK1CDM mapset)                  */
+   /* ----------------------------------------------------------- */
+   %INCLUDE BNK1CDM;
+
+   /* ----------------------------------------------------------- */
+   /*  Abend info structure                                       */
+   /* ----------------------------------------------------------- */
+   %INCLUDE ABNDINFO;
+
+   /* ----------------------------------------------------------- */
+   /*  CICS response codes                                        */
+   /* ----------------------------------------------------------- */
+   DCL WS_CICS_RESP          FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2         FIXED BIN(31) INIT(0);
+
+   /* ----------------------------------------------------------- */
+   /*  Fail info (mirrors WS-FAIL-INFO)                           */
+   /* ----------------------------------------------------------- */
+   DCL 1 WS_FAIL_INFO,
+         2 WS_FI_PGM          CHAR(9)  INIT('BNK1CRA  '),
+         2 WS_CICS_FAIL_MSG   CHAR(70) INIT(' '),
+         2 WS_FI_RESP_LBL     CHAR(6)  INIT(' RESP='),
+         2 WS_CICS_RESP_DISP  CHAR(10) INIT('0000000000'),
+         2 WS_FI_RESP2_LBL    CHAR(7)  INIT(' RESP2='),
+         2 WS_CICS_RESP2_DISP CHAR(10) INIT('0000000000'),
+         2 WS_FI_ABEND        CHAR(15) INIT(' ABENDING TASK.');
+
+   /* ----------------------------------------------------------- */
+   /*  Switches and flags                                         */
+   /* ----------------------------------------------------------- */
+   DCL VALID_DATA_SW         CHAR(1) INIT('Y');
+   DCL SEND_FLAG             CHAR(1) INIT(' ');
+   DCL SEND_ERASE_C          CHAR(1) INIT('1'); /* SEND-ERASE      */
+   DCL SEND_DATAONLY_C       CHAR(1) INIT('2'); /* SEND-DATAONLY   */
+   DCL SEND_DATAONLY_ALARM_C CHAR(1) INIT('3'); /* DATAONLY+ALARM  */
+
+   /* ----------------------------------------------------------- */
+   /*  End of session message and response code                   */
+   /* ----------------------------------------------------------- */
+   DCL END_OF_SESSION_MESSAGE CHAR(13) INIT('Session Ended');
+   DCL RESPONSE_CODE         FIXED BIN(31) INIT(0);
+   DCL WS_CA_LEN             FIXED BIN(15);
+
+   /* ----------------------------------------------------------- */
+   /*  Amount validation work areas                               */
+   /* ----------------------------------------------------------- */
+   DCL WS_AMOUNT_AS_FLOAT    FLOAT BIN(53) INIT(0);
+   DCL WS_NUM_COUNT_TOTAL    FIXED BIN(31) INIT(0);
+   DCL WS_NUM_COUNT_POINT    FIXED BIN(31) INIT(0);
+   DCL WS_NUM_COUNT_SPACE    FIXED BIN(31) INIT(0);
+   DCL WS_AMOUNT_UNSTR       CHAR(13) INIT(' ');
+   DCL WS_AMOUNT_UNSTR_L     FIXED BIN(31) INIT(0);
+   DCL WS_AMOUNT_UNSTR_REVERSE CHAR(13) INIT(' ');
+   DCL WS_I                  FIXED BIN(31) INIT(0);
+   DCL WS_CH                 CHAR(1) INIT(' ');
+
+   /* ----------------------------------------------------------- */
+   /*  Commarea used on the RETURN (WS-COMM-AREA)                 */
+   /* ----------------------------------------------------------- */
+   DCL 1 WS_COMM_AREA,
+         2 WS_COMM_ACCNO      CHAR(8)  INIT(' '),
+         2 WS_COMM_SIGN       CHAR(1)  INIT(' '),
+         2 WS_COMM_AMT        CHAR(12) INIT('000000000000');
+
+   /* ----------------------------------------------------------- */
+   /*  DBCRFUN parameters (mirrors SUBPGM-PARMS / PAYDBCR)        */
+   /* ----------------------------------------------------------- */
+   DCL 1 SUBPGM_PARMS,
+         2 SUBPGM_ACCNO         CHAR(8),
+         2 SUBPGM_AMT           FIXED DEC(12,2),
+         2 SUBPGM_SORTC         CHAR(6),
+         2 SUBPGM_AV_BAL        FIXED DEC(12,2),
+         2 SUBPGM_ACT_BAL       FIXED DEC(12,2),
+         2 SUBPGM_ORIGIN,
+           3 SUBPGM_APPLID        CHAR(8),
+           3 SUBPGM_USERID        CHAR(8),
+           3 SUBPGM_FACILITY_NAME CHAR(8),
+           3 SUBPGM_NETWRK_ID     CHAR(8),
+           3 SUBPGM_FACILTYPE     FIXED BIN(31),
+           3 SUBPGM_ORIGIN_FILL   CHAR(4),
+           3 SUBPGM_DESCRIPTION   CHAR(40),
+         2 SUBPGM_SUCCESS       CHAR(1),
+         2 SUBPGM_FAIL_CODE     CHAR(1);
+
+   /* ----------------------------------------------------------- */
+   /*  Balance display fields (PIC +9(10).99)                     */
+   /* ----------------------------------------------------------- */
+   DCL AVAILABLE_BALANCE_DISPLAY PIC 'S9999999999.99';
+   DCL ACTUAL_BALANCE_DISPLAY    PIC 'S9999999999.99';
+
+   /* ----------------------------------------------------------- */
+   /*  Time/date work areas                                       */
+   /* ----------------------------------------------------------- */
+   DCL WS_U_TIME             FIXED DEC(15,0) INIT(0);
+   DCL WS_ORIG_DATE          CHAR(10);
+   DCL WS_TIME_NOW           CHAR(6);
+
+   /* ----------------------------------------------------------- */
+   /*  Abend program name                                         */
+   /* ----------------------------------------------------------- */
+   DCL WS_ABEND_PGM          CHAR(8) INIT('ABNDPROC');
+
+   /* ----------------------------------------------------------- */
+   /*  AID constants (hex values per IBM DFHAID)                  */
+   /* ----------------------------------------------------------- */
+   DCL DFHENTER  CHAR(1) INIT('7D'X); /* Enter key                 */
+   DCL DFHCLEAR  CHAR(1) INIT('6D'X); /* Clear key                 */
+   DCL DFHPA1    CHAR(1) INIT('6C'X); /* PA1 key                   */
+   DCL DFHPA2    CHAR(1) INIT('6E'X); /* PA2 key                   */
+   DCL DFHPA3    CHAR(1) INIT('6B'X); /* PA3 key                   */
+   DCL DFHPF3    CHAR(1) INIT('F3'X); /* PF3 key                   */
+   DCL DFHPF12   CHAR(1) INIT('7C'X); /* PF12 key                  */
+
+   /* ----------------------------------------------------------- */
+   /*  COMMAREA (BASED on pointer from ADDRESS COMMAREA)          */
+   /* ----------------------------------------------------------- */
+   DCL COMMAREA_PTR          POINTER;
+   DCL 1 DFHCOMMAREA BASED(COMMAREA_PTR),
+         2 COMM_ACCNO         CHAR(8),
+         2 COMM_SIGN          CHAR(1),
+         2 COMM_AMT           CHAR(12);
+
+   /* ========================================================== */
+   /*  MAIN PROCEDURE LOGIC - PREMIERE / A010                    */
+   /* ========================================================== */
+
+   /* Set up abend handler */
+   EXEC CICS HANDLE ABEND LABEL(ABEND_HANDLING) ;
+
+   /* Set the output overlay pointer */
+   BNK1CDO_PTR = ADDR(BNK1CDI);
+
+   IF EIBCALEN = 0 THEN DO;
+     /* First time through - send map with erased data fields */
+     BNK1CDI_RAW = LOW(290);
+     ACCNOL = -1;
+     SEND_FLAG = SEND_ERASE_C;
+     CALL SEND_MAP;
+   END;
+   ELSE IF EIBAID = DFHPA1 | EIBAID = DFHPA2 | EIBAID = DFHPA3 THEN DO;
+     /* PA key pressed - just carry on */
+   END;
+   ELSE IF EIBAID = DFHPF3 THEN DO;
+     /* PF3 - return to the main menu */
+     EXEC CICS RETURN
+          TRANSID('OMEN')
+          IMMEDIATE
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+   END;
+   ELSE IF EIBAID = DFHPF12 THEN DO;
+     /* PF12 - send termination message */
+     CALL SEND_TERMINATION_MSG;
+     EXEC CICS RETURN ;
+   END;
+   ELSE IF EIBAID = DFHCLEAR THEN DO;
+     EXEC CICS SEND CONTROL
+          ERASE
+          FREEKB ;
+     EXEC CICS RETURN ;
+   END;
+   ELSE IF EIBAID = DFHENTER THEN DO;
+     CALL PROCESS_MAP;
+   END;
+   ELSE DO;
+     /* Anything else - invalid key message */
+     BNK1CDI_RAW = LOW(290);
+     MESSAGEO = 'Invalid key pressed.';
+     ACCNOL = 8;
+     SEND_FLAG = SEND_DATAONLY_ALARM_C;
+     CALL SEND_MAP;
+   END;
+
+   /* Not first time through - copy the data returned into the */
+   /* area used as the COMMAREA on the RETURN                  */
+   IF EIBCALEN ^= 0 THEN DO;
+     EXEC CICS ADDRESS
+          COMMAREA(COMMAREA_PTR)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+     WS_COMM_ACCNO = COMM_ACCNO;
+     WS_COMM_SIGN  = COMM_SIGN;
+     WS_COMM_AMT   = COMM_AMT;
+   END;
+
+   EXEC CICS RETURN
+        TRANSID('OCRA')
+        COMMAREA(WS_COMM_AREA)
+        LENGTH(21)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+     CALL INIT_ABNDINFO;
+     ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE = WS_ORIG_DATE;
+     ABND_TIME = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                 SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                 SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE      = 'HBNK';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE   = '0';
+     ABND_FREEFORM  =
+       'A010 - RETURN TRANSID(OCRA) FAIL.' ||
+       'EIBRESP=' || ABND_RESPCODE ||
+       ' RESP2=' || ABND_RESP2CODE;
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     WS_CICS_FAIL_MSG =
+       'BNK1CRA - A010 - RETURN TRANSID(OCRA) FAIL';
+     WS_CICS_RESP_DISP  = SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+     WS_CICS_RESP2_DISP = SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+     CALL ABEND_THIS_TASK;
+   END;
+
+   EXEC CICS RETURN ;
+
+   /* ========================================================== */
+   /*  PROCESS_MAP - PM010                                       */
+   /* ========================================================== */
+   PROCESS_MAP: PROCEDURE;
+
+     /* Retrieve the data from the map */
+     CALL RECEIVE_MAP;
+
+     /* Validate the received data */
+     CALL EDIT_DATA;
+
+     /* If valid, apply the debit or credit */
+     IF VALID_DATA_SW = 'Y' THEN
+       CALL UPD_CRED_DATA;
+
+     SEND_FLAG = SEND_DATAONLY_ALARM_C;
+
+     /* Output the data to the screen */
+     CALL SEND_MAP;
+
+   END PROCESS_MAP;
+
+   /* ========================================================== */
+   /*  RECEIVE_MAP - RM010                                       */
+   /* ========================================================== */
+   RECEIVE_MAP: PROCEDURE;
+
+     EXEC CICS RECEIVE
+          MAP('BNK1CD')
+          MAPSET('BNK1CDM')
+          INTO(BNK1CDI)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+       CALL RAISE_ABEND('RM010 - RECEIVE MAP FAIL.',
+                        'BNKMENU - RM010 - RECEIVE MAP FAIL ');
+
+   END RECEIVE_MAP;
+
+   /* ========================================================== */
+   /*  EDIT_DATA - ED010                                         */
+   /* ========================================================== */
+   EDIT_DATA: PROCEDURE;
+
+     /* Perform validation on the incoming fields */
+     EXEC CICS BIF DEEDIT FIELD(ACCNOI) ;
+
+     IF VERIFY(ACCNOI, '0123456789') ^= 0 THEN DO;
+       MESSAGEO = 'Please enter an account number.  ';
+       VALID_DATA_SW = 'N';
+       RETURN;
+     END;
+
+     IF ACCNOI = '00000000' THEN DO;
+       MESSAGEO = 'Please enter a non zero account number.   ';
+       VALID_DATA_SW = 'N';
+       RETURN;
+     END;
+
+     IF SIGNI ^= '+' & SIGNI ^= '-' & SIGNL = 1 THEN DO;
+       MESSAGEO = 'Please enter + or - preceding the amount ';
+       VALID_DATA_SW = 'N';
+       RETURN;
+     END;
+
+     /* Validate the Amount entered */
+     CALL VALIDATE_AMOUNT;
+
+   END EDIT_DATA;
+
+   /* ========================================================== */
+   /*  UPD_CRED_DATA - UCD010                                    */
+   /* ========================================================== */
+   UPD_CRED_DATA: PROCEDURE;
+
+     /* Set up the COMMAREA fields required by DBCRFUN */
+     SUBPGM_ACCNO         = ' ';
+     SUBPGM_AMT           = 0;
+     SUBPGM_SORTC         = '000000';
+     SUBPGM_AV_BAL        = 0;
+     SUBPGM_ACT_BAL       = 0;
+     SUBPGM_APPLID        = ' ';
+     SUBPGM_USERID        = ' ';
+     SUBPGM_FACILITY_NAME = ' ';
+     SUBPGM_NETWRK_ID     = ' ';
+     SUBPGM_FACILTYPE     = 0;
+     SUBPGM_ORIGIN_FILL   = ' ';
+     SUBPGM_DESCRIPTION   = ' ';
+     SUBPGM_SUCCESS       = ' ';
+     SUBPGM_FAIL_CODE     = ' ';
+
+     SUBPGM_ACCNO = ACCNOI;
+     SUBPGM_AMT   = 0;
+
+     /* Provide the correct Amount */
+     IF SIGNI = '-' THEN
+       WS_AMOUNT_AS_FLOAT = WS_AMOUNT_AS_FLOAT * -1;
+
+     SUBPGM_AMT = WS_AMOUNT_AS_FLOAT;
+
+     /* Get the ORIGIN data */
+     EXEC CICS INQUIRE ASSOCIATION(EIBTASKN)
+          ODAPPLID(SUBPGM_APPLID)
+          ODUSERID(SUBPGM_USERID)
+          ODFACILNAME(SUBPGM_FACILITY_NAME)
+          ODNETWORKID(SUBPGM_NETWRK_ID)
+          ODFACILTYPE(SUBPGM_FACILTYPE) ;
+
+     EXEC CICS LINK
+          PROGRAM('DBCRFUN')
+          COMMAREA(SUBPGM_PARMS)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2)
+          SYNCONRETURN ;
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+       CALL RAISE_ABEND('UCD010 - LINK DBCRFUN FAIL.',
+                        'BNK1CRA - UCD010 - LINK DBCRFUN  FAIL');
+
+     /* Check to see if the debit or credit was successful */
+     IF SUBPGM_SUCCESS = 'N' THEN DO;
+
+       VALID_DATA_SW = 'N';
+
+       SELECT (SUBPGM_FAIL_CODE);
+         WHEN ('1')
+           MESSAGEO =
+             'Sorry but the ACCOUNT no was not found' ||
+             ' for SORTCODE ' || SUBPGM_SORTC ||
+             ' . Amount not applied. ';
+         WHEN ('2')
+           MESSAGEO =
+             'Sorry but the AMOUNT could not be applied' ||
+             ' due to an unexpected error.';
+         WHEN ('3')
+           MESSAGEO =
+             'Sorry insufficient funds available to pro' ||
+             'cess the request.           ';
+         OTHERWISE
+           MESSAGEO =
+             'Sorry but the AMOUNT could not be applied' ||
+             ' due to an unexpected error. ' || SUBPGM_FAIL_CODE;
+       END;
+       RETURN;
+
+     END;
+     ELSE
+       MESSAGEO = 'Amount successfully applied to the account.';
+
+     /* Set up the values on the map */
+     ACCNOO = SUBPGM_ACCNO;
+     SORTCO = SUBPGM_SORTC;
+
+     ACTUAL_BALANCE_DISPLAY    = SUBPGM_ACT_BAL;
+     AVAILABLE_BALANCE_DISPLAY = SUBPGM_AV_BAL;
+     ACTBALO = ACTUAL_BALANCE_DISPLAY;
+     AVBALO  = AVAILABLE_BALANCE_DISPLAY;
+
+   END UPD_CRED_DATA;
+
+   /* ========================================================== */
+   /*  SEND_MAP - SM010                                          */
+   /* ========================================================== */
+   SEND_MAP: PROCEDURE;
+
+     SELECT (SEND_FLAG);
+
+       WHEN (SEND_ERASE_C) DO;
+         EXEC CICS SEND
+              MAP('BNK1CD')
+              MAPSET('BNK1CDM')
+              FROM(BNK1CDO)
+              ERASE
+              FREEKB
+              RESP(WS_CICS_RESP)
+              RESP2(WS_CICS_RESP2) ;
+         IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+           CALL RAISE_ABEND('SM010 - SEND MAP ERASE FAIL.',
+                            'BNK1CRA - SM010 - SEND MAP ERASE FAIL ');
+       END;
+
+       WHEN (SEND_DATAONLY_C) DO;
+         EXEC CICS SEND
+              MAP('BNK1CD')
+              MAPSET('BNK1CDM')
+              FROM(BNK1CDO)
+              DATAONLY
+              FREEKB
+              RESP(WS_CICS_RESP)
+              RESP2(WS_CICS_RESP2) ;
+         IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+           CALL RAISE_ABEND('SM010 - SEND MAP DATAONLY FAIL.',
+                        'BNK1CRA - SM010 - SEND MAP DATAONLY FAIL ');
+       END;
+
+       WHEN (SEND_DATAONLY_ALARM_C) DO;
+         EXEC CICS SEND
+              MAP('BNK1CD')
+              MAPSET('BNK1CDM')
+              FROM(BNK1CDO)
+              DATAONLY
+              ALARM
+              FREEKB
+              RESP(WS_CICS_RESP)
+              RESP2(WS_CICS_RESP2) ;
+         IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+           CALL RAISE_ABEND('SM010 - SEND MAP DATAONLY ALARM FAIL.',
+                    'BNK1CRA - SM010 - SEND MAP DATAONLY ALARM FAIL ');
+       END;
+
+       OTHERWISE;
+
+     END;
+
+   END SEND_MAP;
+
+   /* ========================================================== */
+   /*  SEND_TERMINATION_MSG - STM010                             */
+   /* ========================================================== */
+   SEND_TERMINATION_MSG: PROCEDURE;
+
+     EXEC CICS SEND TEXT
+          FROM(END_OF_SESSION_MESSAGE)
+          ERASE
+          FREEKB
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+       CALL RAISE_ABEND('STM010 - SEND TEXT FAIL.',
+                        'BNK1CRA - STM010 - SEND TEXT FAIL');
+
+   END SEND_TERMINATION_MSG;
+
+   /* ========================================================== */
+   /*  ABEND_THIS_TASK - ATT010                                  */
+   /* ========================================================== */
+   ABEND_THIS_TASK: PROCEDURE;
+
+     PUT SKIP LIST(WS_FAIL_INFO);
+     EXEC CICS ABEND
+          ABCODE('HBNK')
+          NODUMP ;
+
+   END ABEND_THIS_TASK;
+
+   /* ========================================================== */
+   /*  VALIDATE_AMOUNT - VA010                                   */
+   /* ========================================================== */
+   VALIDATE_AMOUNT: PROCEDURE;
+
+     WS_AMOUNT_AS_FLOAT = 0;
+
+     IF AMTL = 0 THEN DO;
+       MESSAGEO = 'The Amount entered must be numeric.';
+       VALID_DATA_SW = 'N';
+       AMTL = -1;
+       RETURN;
+     END;
+
+     /* Entirely numeric - simple case */
+     IF VERIFY(SUBSTR(AMTI,1,AMTL), '0123456789') = 0 THEN DO;
+       WS_AMOUNT_AS_FLOAT = SUBSTR(AMTI,1,AMTL);
+       VALID_DATA_SW = 'Y';
+       RETURN;
+     END;
+
+     /* Count the leading spaces */
+     WS_I = VERIFY(SUBSTR(AMTI,1,AMTL), ' ');
+     IF WS_I = 0 THEN
+       WS_NUM_COUNT_TOTAL = AMTL;
+     ELSE
+       WS_NUM_COUNT_TOTAL = WS_I - 1;
+
+     /* It is entirely spaces */
+     IF WS_NUM_COUNT_TOTAL = AMTL THEN DO;
+       MESSAGEO = 'The Amount entered must be numeric.';
+       VALID_DATA_SW = 'N';
+       AMTL = -1;
+       RETURN;
+     END;
+
+     WS_AMOUNT_UNSTR_L = AMTL - WS_NUM_COUNT_TOTAL;
+
+     /* Left justify the amount, dropping the leading spaces */
+     WS_AMOUNT_UNSTR = ' ';
+     WS_AMOUNT_UNSTR = SUBSTR(AMTI, WS_NUM_COUNT_TOTAL + 1,
+                              WS_AMOUNT_UNSTR_L);
+
+     /* Remove the trailing spaces from the length */
+     WS_AMOUNT_UNSTR_REVERSE =
+       REVERSE(SUBSTR(WS_AMOUNT_UNSTR, 1, WS_AMOUNT_UNSTR_L));
+     WS_NUM_COUNT_TOTAL = VERIFY(WS_AMOUNT_UNSTR_REVERSE, ' ') - 1;
+     WS_AMOUNT_UNSTR_L = WS_AMOUNT_UNSTR_L - WS_NUM_COUNT_TOTAL;
+
+     /* Count valid characters, decimal points and spaces */
+     WS_NUM_COUNT_TOTAL = 0;
+     WS_NUM_COUNT_SPACE = 0;
+     WS_NUM_COUNT_POINT = 0;
+     DO WS_I = 1 TO WS_AMOUNT_UNSTR_L;
+       WS_CH = SUBSTR(WS_AMOUNT_UNSTR, WS_I, 1);
+       IF WS_CH = ' ' THEN
+         WS_NUM_COUNT_SPACE = WS_NUM_COUNT_SPACE + 1;
+       ELSE IF VERIFY(WS_CH, '0123456789.') = 0 THEN
+         WS_NUM_COUNT_TOTAL = WS_NUM_COUNT_TOTAL + 1;
+       IF WS_CH = '.' THEN
+         WS_NUM_COUNT_POINT = WS_NUM_COUNT_POINT + 1;
+     END;
+
+     /* No embedded spaces are tolerated */
+     IF WS_NUM_COUNT_SPACE > 0 THEN DO;
+       MESSAGEO =
+         'Please supply a numeric amount without embedded spaces.';
+       VALID_DATA_SW = 'N';
+       AMTL = -1;
+       RETURN;
+     END;
+
+     IF WS_NUM_COUNT_TOTAL < WS_AMOUNT_UNSTR_L THEN DO;
+       MESSAGEO = 'Please supply a numeric amount.';
+       VALID_DATA_SW = 'N';
+       AMTL = -1;
+       RETURN;
+     END;
+
+     /* Check that we have no or just one decimal point */
+     IF WS_NUM_COUNT_POINT > 1 THEN DO;
+       MESSAGEO = 'Use one decimal point for amount only.';
+       VALID_DATA_SW = 'N';
+       AMTL = -1;
+       RETURN;
+     END;
+
+     /* Have we got too many decimals? */
+     IF WS_NUM_COUNT_POINT = 1 THEN DO;
+       WS_I = INDEX(SUBSTR(WS_AMOUNT_UNSTR, 1,
+                           WS_AMOUNT_UNSTR_L), '.');
+       IF WS_AMOUNT_UNSTR_L - WS_I > 2 THEN DO;
+         MESSAGEO = 'Only up to two decimal places are supported.';
+         VALID_DATA_SW = 'N';
+         AMTL = -1;
+         RETURN;
+       END;
+     END;
+
+     WS_AMOUNT_AS_FLOAT =
+       SUBSTR(WS_AMOUNT_UNSTR, 1, WS_AMOUNT_UNSTR_L);
+
+     IF WS_AMOUNT_AS_FLOAT = 0 THEN DO;
+       MESSAGEO = 'Please supply a non-zero amount.';
+       VALID_DATA_SW = 'N';
+       AMTL = -1;
+       RETURN;
+     END;
+
+     MESSAGEO = ' ';
+     VALID_DATA_SW = 'Y';
+
+   END VALIDATE_AMOUNT;
+
+   /* ========================================================== */
+   /*  POPULATE_TIME_DATE - PTD010                               */
+   /* ========================================================== */
+   POPULATE_TIME_DATE: PROCEDURE;
+
+     EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+
+     EXEC CICS FORMATTIME
+          ABSTIME(WS_U_TIME)
+          DDMMYYYY(WS_ORIG_DATE)
+          TIME(WS_TIME_NOW)
+          DATESEP ;
+
+   END POPULATE_TIME_DATE;
+
+   /* ========================================================== */
+   /*  INIT_ABNDINFO - INITIALIZE ABNDINFO-REC                   */
+   /* ========================================================== */
+   INIT_ABNDINFO: PROCEDURE;
+
+     ABNDINFO_REC = '';
+
+   END INIT_ABNDINFO;
+
+   /* ========================================================== */
+   /*  RAISE_ABEND - common abend info build, LINK and abend     */
+   /*  (replaces the repeated in-line block in the COBOL)        */
+   /* ========================================================== */
+   RAISE_ABEND: PROCEDURE(FREE_TXT, FAIL_TXT);
+
+     DCL FREE_TXT CHAR(*);
+     DCL FAIL_TXT CHAR(*);
+
+     CALL INIT_ABNDINFO;
+     ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE = WS_ORIG_DATE;
+     ABND_TIME = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                 SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                 SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE      = 'HBNK';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE   = '0';
+     ABND_FREEFORM  =
+       FREE_TXT || 'EIBRESP=' || ABND_RESPCODE ||
+       ' RESP2=' || ABND_RESP2CODE;
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     WS_CICS_FAIL_MSG   = FAIL_TXT;
+     WS_CICS_RESP_DISP  = SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+     WS_CICS_RESP2_DISP = SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+     CALL ABEND_THIS_TASK;
+
+   END RAISE_ABEND;
+
+   /* ========================================================== */
+   /*  ABEND_HANDLING - CICS abend handler label                 */
+   /* ========================================================== */
+   ABEND_HANDLING:
+     EXEC CICS ABEND ABCODE('HBNK') NODUMP ;
+
+ END BNK1CRA;

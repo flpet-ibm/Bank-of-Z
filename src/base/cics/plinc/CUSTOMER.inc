@@ -1,0 +1,35 @@
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                         */
+ /*  CUSTOMER.inc - Customer data structure                           */
+ /*  Mirrors CUSTOMER.cpy                                             */
+ /* ----------------------------------------------------------------- */
+ DCL 1 CUSTOMER_RECORD,
+       2 CUSTOMER_EYECATCHER   CHAR(4),
+       2 CUSTOMER_KEY,
+         3 CUSTOMER_SORTCODE   CHAR(6),
+         3 CUSTOMER_NUMBER     CHAR(10),
+       2 CUSTOMER_NAME,
+         3 CUSTOMER_TITLE      CHAR(10),
+         3 CUSTOMER_FIRST_NAME CHAR(50),
+         3 CUSTOMER_LAST_NAME  CHAR(50),
+       2 CUSTOMER_DOB,
+         3 CUSTOMER_DOB_DAY    CHAR(2),
+         3 CUSTOMER_DOB_MONTH  CHAR(2),
+         3 CUSTOMER_DOB_YEAR   CHAR(4),
+       2 CUSTOMER_PHONE        CHAR(20),
+       2 CUSTOMER_ADDRESS,
+         3 CUSTOMER_ADDR_LINE1 CHAR(50),
+         3 CUSTOMER_ADDR_LINE2 CHAR(50),
+         3 CUSTOMER_CITY       CHAR(50),
+         3 CUSTOMER_POSTCODE   CHAR(10),
+         3 CUSTOMER_COUNTRY    CHAR(50),
+       2 CUSTOMER_STATUS       CHAR(10),
+       2 CUSTOMER_CREATED_DATE,
+         3 CUSTOMER_CREATED_DAY   CHAR(2),
+         3 CUSTOMER_CREATED_MONTH CHAR(2),
+         3 CUSTOMER_CREATED_YEAR  CHAR(4),
+       2 CUSTOMER_CREDIT_SCORE    FIXED DEC(3,0),
+       2 CUSTOMER_CS_REVIEW_DATE,
+         3 CUSTOMER_CS_REVIEW_DAY   CHAR(2),
+         3 CUSTOMER_CS_REVIEW_MONTH CHAR(2),
+         3 CUSTOMER_CS_REVIEW_YEAR  CHAR(4);

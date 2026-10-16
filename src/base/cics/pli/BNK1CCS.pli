@@ -1,0 +1,1122 @@
+ *PROCESS CICS;
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                        */
+ /* ----------------------------------------------------------------- */
+ /*  BNK1CCS - Create Customer screen program (BMS suite)           */
+ /*  Converted from COBOL BNK1CCS.cbl                               */
+ /* ----------------------------------------------------------------- */
+ BNK1CCS: PROCEDURE OPTIONS(MAIN REENTRANT);
+
+   /* --------------------------------------------------------------- */
+   /*  BMS symbolic map include (BNK1CCM mapset)                     */
+   /* --------------------------------------------------------------- */
+   %INCLUDE BNK1CCM;
+
+   /* --------------------------------------------------------------- */
+   /*  Abend info structure                                           */
+   /* --------------------------------------------------------------- */
+   %INCLUDE ABNDINFO;
+
+   /* --------------------------------------------------------------- */
+   /*  CRECUST commarea structure                                     */
+   /* --------------------------------------------------------------- */
+   %INCLUDE CRECUST;
+
+   /* --------------------------------------------------------------- */
+   /*  CICS response codes                                            */
+   /* --------------------------------------------------------------- */
+   DCL WS_CICS_RESP          FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2         FIXED BIN(31) INIT(0);
+
+   /* --------------------------------------------------------------- */
+   /*  UCTRANS working storage                                        */
+   /* --------------------------------------------------------------- */
+   DCL WS_UCTRANS             FIXED BIN(31) INIT(0);
+   DCL STORED_UCTRANS         FIXED BIN(31) INIT(0);
+
+   /* --------------------------------------------------------------- */
+   /*  Fail info (mirrors WS-FAIL-INFO)                              */
+   /* --------------------------------------------------------------- */
+   DCL 1 WS_FAIL_INFO,
+         2 WS_FI_PGM         CHAR(9)  INIT('BNK1CCS  '),
+         2 WS_CICS_FAIL_MSG  CHAR(70) INIT(' '),
+         2 WS_FI_RESP_LBL    CHAR(6)  INIT(' RESP='),
+         2 WS_CICS_RESP_DISP CHAR(10) INIT('0000000000'),
+         2 WS_FI_RESP2_LBL   CHAR(7)  INIT(' RESP2='),
+         2 WS_CICS_RESP2_DISP CHAR(10) INIT('0000000000'),
+         2 WS_FI_ABEND       CHAR(15) INIT(' ABENDING TASK.');
+
+   /* --------------------------------------------------------------- */
+   /*  Switches and flags                                             */
+   /* --------------------------------------------------------------- */
+   DCL VALID_DATA_SW         CHAR(1) INIT('Y');
+   DCL SEND_FLAG             CHAR(1);
+   DCL SEND_ERASE_C          CHAR(1) INIT('1');
+   DCL SEND_DATAONLY_C       CHAR(1) INIT('2');
+   DCL SEND_DATAONLY_ALARM_C CHAR(1) INIT('3');
+
+   /* --------------------------------------------------------------- */
+   /*  End of session message                                         */
+   /* --------------------------------------------------------------- */
+   DCL END_OF_SESSION_MESSAGE CHAR(13) INIT('Session Ended');
+
+   /* --------------------------------------------------------------- */
+   /*  Response code                                                  */
+   /* --------------------------------------------------------------- */
+   DCL RESPONSE_CODE         FIXED BIN(31) INIT(0);
+
+   /* --------------------------------------------------------------- */
+   /*  WS-COMM-AREA (commarea passed on RETURN)                      */
+   /* --------------------------------------------------------------- */
+   DCL 1 WS_COMM_AREA,
+         2 WS_COMM_DATA      CHAR(1) INIT(' '),
+         2 WS_COMM_TERM      FIXED BIN(31) INIT(0);
+
+   /* --------------------------------------------------------------- */
+   /*  Date-of-birth split work areas                                 */
+   /* --------------------------------------------------------------- */
+   DCL 1 COMM_DOB_SPLIT,
+         2 COMM_DOB_SPLIT_DD   CHAR(2),
+         2 COMM_DOB_SPLIT_MM   CHAR(2),
+         2 COMM_DOB_SPLIT_YYYY CHAR(4);
+
+   /* --------------------------------------------------------------- */
+   /*  Address split work areas                                       */
+   /* --------------------------------------------------------------- */
+   DCL 1 COMM_ADDR_SPLIT,
+         2 COMM_ADDR_SPLIT1  CHAR(60),
+         2 COMM_ADDR_SPLIT2  CHAR(60),
+         2 COMM_ADDR_SPLIT3  CHAR(40);
+
+   /* --------------------------------------------------------------- */
+   /*  SUBPGM-PARMS (mirrors SUBPGM-PARMS in COBOL)                  */
+   /* --------------------------------------------------------------- */
+   DCL 1 SUBPGM_PARMS,
+         2 SUBPGM_EYECATCHER CHAR(4)   INIT(' '),
+         2 SUBPGM_KEY,
+           3 SUBPGM_SORTCODE CHAR(6)   INIT(' '),
+           3 SUBPGM_NUMBER   CHAR(10)  INIT(' '),
+         2 SUBPGM_NAME,
+           3 SUBPGM_TITLE    CHAR(10)  INIT(' '),
+           3 SUBPGM_FIRST_NAME CHAR(50) INIT(' '),
+           3 SUBPGM_LAST_NAME  CHAR(50) INIT(' '),
+         2 SUBPGM_DOB,
+           3 SUBPGM_BIRTH_DAY   CHAR(2) INIT(' '),
+           3 SUBPGM_BIRTH_MONTH CHAR(2) INIT(' '),
+           3 SUBPGM_BIRTH_YEAR  CHAR(4) INIT(' '),
+         2 SUBPGM_PHONE      CHAR(20)  INIT(' '),
+         2 SUBPGM_ADDR,
+           3 SUBPGM_ADDR_LINE1 CHAR(50) INIT(' '),
+           3 SUBPGM_ADDR_LINE2 CHAR(50) INIT(' '),
+           3 SUBPGM_CITY       CHAR(50) INIT(' '),
+           3 SUBPGM_POSTCODE   CHAR(10) INIT(' '),
+           3 SUBPGM_COUNTRY    CHAR(50) INIT(' '),
+         2 SUBPGM_STATUS     CHAR(10)  INIT(' '),
+         2 SUBPGM_CREATED_DATE,
+           3 SUBPGM_CREATED_DAY   CHAR(2) INIT(' '),
+           3 SUBPGM_CREATED_MONTH CHAR(2) INIT(' '),
+           3 SUBPGM_CREATED_YEAR  CHAR(4) INIT(' '),
+         2 SUBPGM_CREDIT_SCORE   CHAR(3) INIT(' '),
+         2 SUBPGM_CS_REVIEW_DATE CHAR(8) INIT(' '),
+         2 SUBPGM_SUCCESS    CHAR(1)   INIT('N'),
+         2 SUBPGM_FAIL_CODE  CHAR(1)   INIT(' ');
+
+
+   /* --------------------------------------------------------------- */
+   /*  Company name and cursor position                               */
+   /* --------------------------------------------------------------- */
+   DCL COMPANY_NAME_FULL     CHAR(32);
+   DCL CURSOR_POSITION       FIXED BIN(15) INIT(0);
+
+   /* --------------------------------------------------------------- */
+   /*  Time / date work areas                                         */
+   /* --------------------------------------------------------------- */
+   DCL WS_U_TIME             FIXED DEC(15,0) INIT(0);
+   DCL WS_ORIG_DATE          CHAR(10);
+   DCL WS_TIME_NOW           CHAR(6);
+
+   /* --------------------------------------------------------------- */
+   /*  Abend program and code                                         */
+   /* --------------------------------------------------------------- */
+   DCL WS_ABEND_PGM          CHAR(8) INIT('ABNDPROC');
+   DCL WS_ABCODE             CHAR(4);
+
+   /* --------------------------------------------------------------- */
+   /*  Length work variable                                           */
+   /* --------------------------------------------------------------- */
+   DCL WS_CA_LEN             FIXED BIN(15);
+
+   /* --------------------------------------------------------------- */
+   /*  DFHAID key constants (hex per IBM DFHAID)                     */
+   /* --------------------------------------------------------------- */
+   DCL DFHENTER  CHAR(1) INIT('7D'X); /* Enter key               */
+   DCL DFHCLEAR  CHAR(1) INIT('6D'X); /* Clear key               */
+   DCL DFHPA1    CHAR(1) INIT('6C'X); /* PA1 key                 */
+   DCL DFHPA2    CHAR(1) INIT('6E'X); /* PA2 key                 */
+   DCL DFHPA3    CHAR(1) INIT('6B'X); /* PA3 key                 */
+   DCL DFHPF3    CHAR(1) INIT('F3'X); /* PF3 key                 */
+   DCL DFHPF12   CHAR(1) INIT('7C'X); /* PF12 key                */
+
+   /* --------------------------------------------------------------- */
+   /*  COMMAREA (accessed via EIBCALEN / DFHCOMMAREA builtin)        */
+   /* --------------------------------------------------------------- */
+   DCL COMMAREA_PTR  POINTER;
+   DCL 1 DFHCOMMAREA BASED(COMMAREA_PTR),
+         2 DFHCOMMAREA_DATA CHAR(5);
+
+   /* ============================================================= */
+   /*  MAIN PROCEDURE LOGIC (PREMIERE / A010)                         */
+   /* ============================================================= */
+
+   EXEC CICS HANDLE ABEND LABEL(ABEND_HANDLING) ;
+
+   /* Set output overlay pointer */
+   BNK1CCO_PTR = ADDR(BNK1CCI);
+
+   /* --------------------------------------------------------------- */
+   /*  First time through (no commarea)?                              */
+   /* --------------------------------------------------------------- */
+   IF EIBCALEN = 0 THEN DO;
+     BNK1CCI              = '';
+     CUSTTITO             = ' ';
+     CHRISTNO             = ' ';
+     CUSTINSO             = ' ';
+     CUSTSNO              = ' ';
+     CUSTAD1O             = ' ';
+     CUSTAD2O             = ' ';
+     CUSTTITL             = -1;
+     SEND_FLAG            = SEND_ERASE_C;
+     MESSAGEO             = ' ';
+     CALL STORE_TERM_DEF;
+     CALL SEND_MAP;
+     WS_COMM_DATA         = ' ';
+     WS_COMM_TERM         = STORED_UCTRANS;
+   END;
+
+   /* --------------------------------------------------------------- */
+   /*  PA key - just continue                                         */
+   /* --------------------------------------------------------------- */
+   ELSE IF EIBAID = DFHPA1 | EIBAID = DFHPA2 |
+           EIBAID = DFHPA3 THEN
+     /* PA key - no action */ ;
+
+   /* --------------------------------------------------------------- */
+   /*  PF3 - return to main menu                                      */
+   /* --------------------------------------------------------------- */
+   ELSE IF EIBAID = DFHPF3 THEN DO;
+     CALL RESTORE_TERM_DEF;
+     EXEC CICS RETURN
+          TRANSID('OMEN')
+          IMMEDIATE
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+   END;
+
+   /* --------------------------------------------------------------- */
+   /*  PF12 - send termination message then return                    */
+   /* --------------------------------------------------------------- */
+   ELSE IF EIBAID = DFHPF12 THEN DO;
+     CALL SEND_TERMINATION_MSG;
+     CALL RESTORE_TERM_DEF;
+     EXEC CICS RETURN ;
+   END;
+
+   /* --------------------------------------------------------------- */
+   /*  CLEAR - send map only, restore terminal, return                */
+   /* --------------------------------------------------------------- */
+   ELSE IF EIBAID = DFHCLEAR THEN DO;
+     EXEC CICS SEND MAP('BNK1CC')
+          MAPSET('BNK1CCM')
+          MAPONLY
+          ERASE
+          FREEKB ;
+     CALL RESTORE_TERM_DEF;
+     EXEC CICS RETURN
+          TRANSID('OCCS')
+          COMMAREA(WS_COMM_AREA) ;
+   END;
+
+   /* --------------------------------------------------------------- */
+   /*  ENTER - process the map                                        */
+   /* --------------------------------------------------------------- */
+   ELSE IF EIBAID = DFHENTER THEN
+     CALL PROCESS_MAP;
+
+   /* --------------------------------------------------------------- */
+   /*  Any other key - display invalid key message                    */
+   /* --------------------------------------------------------------- */
+   ELSE DO;
+     WS_COMM_AREA = DFHCOMMAREA;
+     BNK1CCI      = '';
+     MESSAGEO     = ' ';
+     MESSAGEO     = 'Invalid key pressed.';
+     SEND_FLAG    = SEND_DATAONLY_ALARM_C;
+     CALL SEND_MAP;
+   END;
+
+   /* --------------------------------------------------------------- */
+   /*  Final RETURN with commarea (A010)                              */
+   /* --------------------------------------------------------------- */
+   WS_CA_LEN = SIZE(WS_COMM_AREA);
+   EXEC CICS RETURN
+        TRANSID('OCCS')
+        COMMAREA(WS_COMM_AREA)
+        LENGTH(248)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+     ABNDINFO_REC           = '';
+     ABND_RESPCODE          = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE         = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY        = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID            = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE              = WS_ORIG_DATE;
+     ABND_TIME = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                 SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                 SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY         = WS_U_TIME;
+     ABND_CODE              = 'HBNK';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE           = '0';
+     ABND_FREEFORM =
+       'A010 - RETURN TRANSID(OCCS) FAIL' ||
+       'EIBRESP=' || ABND_RESPCODE ||
+       ' RESP2=' || ABND_RESP2CODE;
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     WS_CICS_FAIL_MSG =
+       'BNK1CCS - A010 - RETURN TRANSID(OCCS) FAIL';
+     WS_CICS_RESP_DISP  = SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+     WS_CICS_RESP2_DISP = SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+     CALL RESTORE_TERM_DEF;
+     CALL ABEND_THIS_TASK;
+   END;
+
+
+   /* ============================================================= */
+   /*  PROCESS_MAP - PM010                                            */
+   /* ============================================================= */
+   PROCESS_MAP: PROCEDURE;
+
+     WS_COMM_AREA = DFHCOMMAREA;
+     CALL RECEIVE_MAP;
+     CALL EDIT_DATA;
+     IF VALID_DATA_SW = 'Y' THEN
+       CALL CRE_CUST_DATA;
+     SEND_FLAG = SEND_DATAONLY_ALARM_C;
+     CALL SEND_MAP;
+
+   END PROCESS_MAP;
+
+   /* ============================================================= */
+   /*  RECEIVE_MAP - RM010                                            */
+   /* ============================================================= */
+   RECEIVE_MAP: PROCEDURE;
+
+     /* Inquire UCTRANST - turn off UC translation before receive */
+     EXEC CICS INQUIRE
+          TERMINAL(EIBTRMID)
+          UCTRANST(WS_UCTRANS)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+
+     IF WS_UCTRANS = DFHVALUE(UCTRAN) |
+        WS_UCTRANS = DFHVALUE(TRANIDONLY) THEN DO;
+       WS_UCTRANS = DFHVALUE(NOUCTRAN);
+       EXEC CICS SET TERMINAL(EIBTRMID)
+            UCTRANST(WS_UCTRANS)
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         ABNDINFO_REC       = '';
+         ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+         ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+         EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+         ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+         ABND_TRANID        = EIBTRNID;
+         CALL POPULATE_TIME_DATE;
+         ABND_DATE          = WS_ORIG_DATE;
+         ABND_TIME = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                     SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                     SUBSTR(WS_TIME_NOW,5,2);
+         ABND_UTIME_KEY     = WS_U_TIME;
+         ABND_CODE          = 'HBNK';
+         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+         ABND_SQLCODE       = '0';
+         ABND_FREEFORM =
+           'RM010 (1) - SET TERMINAL UC FAIL' ||
+           'EIBRESP=' || ABND_RESPCODE ||
+           ' RESP2=' || ABND_RESP2CODE;
+         WS_CA_LEN = SIZE(ABNDINFO_REC);
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                        COMMAREA(ABNDINFO_REC)
+                        LENGTH(WS_CA_LEN) ;
+         WS_CICS_FAIL_MSG =
+           'BNK1CCS - RM010 (1) - SET TERMINAL UC FAIL';
+         WS_CICS_RESP_DISP  = SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+         WS_CICS_RESP2_DISP = SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+         CALL RESTORE_TERM_DEF;
+         CALL ABEND_THIS_TASK;
+       END;
+     END;
+
+     /* Receive map AS IS */
+     BNK1CCI    = '';
+     CUSTTITI   = ' ';
+     CHRISTNI   = ' ';
+     CUSTINSI   = ' ';
+     CUSTSNI    = ' ';
+     CUSTAD1I   = ' ';
+     CUSTAD2I   = ' ';
+     CITYI      = ' ';
+     POSTCODEI  = ' ';
+     COUNTRYI   = ' ';
+     DOBDDI     = ' ';
+     DOBMMI     = ' ';
+     DOBYYI     = ' ';
+     SORTCI     = ' ';
+     CUSTNO2I   = ' ';
+     CREDSCI    = ' ';
+     SCRDTDDI   = ' ';
+     SCRDTMMI   = ' ';
+     SCRDTYYI   = ' ';
+     MESSAGEI   = ' ';
+
+     EXEC CICS RECEIVE
+          MAP('BNK1CC')
+          MAPSET('BNK1CCM')
+          INTO(BNK1CCI)
+          TERMINAL
+          ASIS
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       ABNDINFO_REC       = '';
+       ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+       ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+       EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+       ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+       ABND_TRANID        = EIBTRNID;
+       CALL POPULATE_TIME_DATE;
+       ABND_DATE          = WS_ORIG_DATE;
+       ABND_TIME = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                   SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                   SUBSTR(WS_TIME_NOW,5,2);
+       ABND_UTIME_KEY     = WS_U_TIME;
+       ABND_CODE          = 'HBNK';
+       EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+       ABND_SQLCODE       = '0';
+       ABND_FREEFORM =
+         'RM010 (2) - RECEIVE MAP FAIL' ||
+         'EIBRESP=' || ABND_RESPCODE ||
+         ' RESP2=' || ABND_RESP2CODE;
+       WS_CA_LEN = SIZE(ABNDINFO_REC);
+       EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                      COMMAREA(ABNDINFO_REC)
+                      LENGTH(WS_CA_LEN) ;
+       WS_CICS_FAIL_MSG =
+         'BNK1CCS - RM010 (2) - RECEIVE MAP FAIL';
+       WS_CICS_RESP_DISP  = SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+       WS_CICS_RESP2_DISP = SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+       CALL RESTORE_TERM_DEF;
+       CALL ABEND_THIS_TASK;
+     END;
+
+   END RECEIVE_MAP;
+
+
+   /* ============================================================= */
+   /*  EDIT_DATA - ED010                                              */
+   /* ============================================================= */
+   EDIT_DATA: PROCEDURE;
+
+     /* If CUSTNO2 field already populated - screen not cleared */
+     IF CUSTNO2L > 0 THEN DO;
+       MESSAGEO = 'Please clear screen before creating new user';
+       CUSTTITL = -1;
+       VALID_DATA_SW = 'N';
+       GOTO ED999;
+     END;
+
+     /* Validate title field */
+     IF CUSTTITL < 1 | CUSTTITI = ' ' | CUSTTITI = '' THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO =
+         'Valid titles are: Mr,Mrs,Miss,Ms,Dr,Professor,' ||
+         'Drs,Lord,Sir,Lady';
+       CUSTTITL = -1;
+       VALID_DATA_SW = 'N';
+       GOTO ED999;
+     END;
+
+     MESSAGEO = ' ';
+
+     IF CUSTTITL > 0 THEN DO;
+       /* Normalise title value to canonical form */
+       SELECT;
+         WHEN (CUSTTITI = 'MR________' | CUSTTITI = 'Mr________' |
+               CUSTTITI = 'MR        ' | CUSTTITI = 'mr________')
+           CUSTTITI = 'Mr';
+         WHEN (CUSTTITI = 'Mr         ')
+           /* already correct */ ;
+         WHEN (CUSTTITI = 'MRS_______' | CUSTTITI = 'Mrs_______' |
+               CUSTTITI = 'MRS       ' | CUSTTITI = 'mrs_______')
+           CUSTTITI = 'Mrs';
+         WHEN (CUSTTITI = 'Mrs       ')
+           /* already correct */ ;
+         WHEN (CUSTTITI = 'MISS______' | CUSTTITI = 'Miss______' |
+               CUSTTITI = 'MISS      ' | CUSTTITI = 'Miss      ' |
+               CUSTTITI = 'miss______')
+           CUSTTITI = 'Miss';
+         WHEN (CUSTTITI = 'MS________' | CUSTTITI = 'Ms________' |
+               CUSTTITI = 'ms________' | CUSTTITI = 'MS        ' |
+               CUSTTITI = 'Ms        ' | CUSTTITI = 'ms        ')
+           CUSTTITI = 'Ms';
+         WHEN (CUSTTITI = 'DR________' | CUSTTITI = 'Dr________' |
+               CUSTTITI = 'DR        ' | CUSTTITI = 'Dr        ' |
+               CUSTTITI = 'dr        ' | CUSTTITI = 'dr________')
+           CUSTTITI = 'Dr';
+         WHEN (CUSTTITI = 'DRS_______' | CUSTTITI = 'Drs_______' |
+               CUSTTITI = 'DRS       ' | CUSTTITI = 'Drs       ' |
+               CUSTTITI = 'drs       ' | CUSTTITI = 'drs_______')
+           CUSTTITI = 'Drs';
+         WHEN (CUSTTITI = 'PROFESSOR_' | CUSTTITI = 'Professor_' |
+               CUSTTITI = 'PROFESSOR ' | CUSTTITI = 'Professor ')
+           CUSTTITI = 'Professor';
+         WHEN (CUSTTITI = 'LORD______' | CUSTTITI = 'Lord______' |
+               CUSTTITI = 'LORD      ' | CUSTTITI = 'Lord      ' |
+               CUSTTITI = 'lord      ' | CUSTTITI = 'lord______')
+           CUSTTITI = 'Lord';
+         WHEN (CUSTTITI = 'LADY______' | CUSTTITI = 'Lady______' |
+               CUSTTITI = 'LADY      ' | CUSTTITI = 'Lady      ' |
+               CUSTTITI = 'lady      ' | CUSTTITI = 'lady______')
+           CUSTTITI = 'Lady';
+         WHEN (CUSTTITI = 'SIR_______' | CUSTTITI = 'Sir_______' |
+               CUSTTITI = 'SIR       ' | CUSTTITI = 'Sir       ' |
+               CUSTTITI = 'sir       ' | CUSTTITI = 'sir_______')
+           CUSTTITI = 'Sir';
+         OTHERWISE DO;
+           MESSAGEO = ' ';
+           MESSAGEO =
+             'Valid titles are: Mr,Mrs,Miss,Ms,Dr,Drs,' ||
+             'Professor,Lord,Sir,Lady';
+           VALID_DATA_SW = 'N';
+           CUSTTITL = -1;
+           GOTO ED999;
+         END;
+       END; /* SELECT */
+     END;
+
+     /* Validate first name */
+     IF CHRISTNL < 1 | CHRISTNI = '____________________' |
+        CHRISTNI = ' ' THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Please supply a valid First Name  ';
+       CHRISTNL = -1;
+       VALID_DATA_SW = 'N';
+       GOTO ED999;
+     END;
+
+     /* Validate surname */
+     IF CUSTSNL < 1 | CUSTSNI = '____________________' |
+        CUSTSNI = ' ' THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Please supply a valid Surname ';
+       CUSTSNL = -1;
+       VALID_DATA_SW = 'N';
+       GOTO ED999;
+     END;
+
+     /* Validate address line 1 */
+     IF SUBSTR(CUSTAD1I,1,1) = '_' | CUSTAD1L < 1 |
+        CUSTAD1I = ' ' THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Please supply a valid Address Line 1 ';
+       VALID_DATA_SW = 'N';
+       CUSTAD1L = -1;
+       GOTO ED999;
+     END;
+
+     /* Validate DOB day */
+     IF DOBDDL < 1 | DOBDDI = '__' THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Please supply a valid Date of Birth DD';
+       VALID_DATA_SW = 'N';
+       DOBDDL = -1;
+       GOTO ED999;
+     END;
+
+     /* Validate DOB month */
+     IF DOBMML < 1 | DOBMMI = '__' THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Please supply a valid Date of Birth MM';
+       VALID_DATA_SW = 'N';
+       DOBMML = -1;
+       GOTO ED999;
+     END;
+
+     /* Validate DOB year */
+     IF DOBYYL < 4 | DOBYYI = '____' THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Please supply a valid Date of Birth YYYY';
+       VALID_DATA_SW = 'N';
+       DOBYYL = -1;
+       GOTO ED999;
+     END;
+
+     /* Numeric checks on DOB fields */
+     IF VERIFY(DOBDDI, '0123456789') ^= 0 THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Non numeric Date of Birth DD entered      ';
+       VALID_DATA_SW = 'N';
+       DOBDDL = -1;
+       GOTO ED999;
+     END;
+
+     IF VERIFY(DOBMMI, '0123456789') ^= 0 THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Non numeric Date of Birth MM entered      ';
+       VALID_DATA_SW = 'N';
+       DOBMML = -1;
+       GOTO ED999;
+     END;
+
+     IF VERIFY(DOBYYI, '0123456789') ^= 0 THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Non numeric Date of Birth YYYY entered  ';
+       VALID_DATA_SW = 'N';
+       DOBYYL = -1;
+       GOTO ED999;
+     END;
+
+     /* Range check DOB day 01-31 */
+     IF (FIXED(DOBDDI,2) < 1) | (FIXED(DOBDDI,2) > 31) THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO =
+         'Please supply a valid Date of Birth (DD)    ';
+       VALID_DATA_SW = 'N';
+       DOBDDL = -1;
+       GOTO ED999;
+     END;
+
+     /* Range check DOB month 01-12 */
+     IF (FIXED(DOBMMI,2) < 1) | (FIXED(DOBMMI,2) > 12) THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO =
+         'Please supply a valid Date of Birth (MM)    ';
+       VALID_DATA_SW = 'N';
+       DOBMML = -1;
+       GOTO ED999;
+     END;
+
+     /* Final mandatory-field sweep */
+     IF CUSTTITL < 1 | CHRISTNL < 1 | CUSTSNL < 1 |
+        CUSTAD1L < 1 | DOBDDL < 1   | DOBMML < 1  |
+        DOBYYL < 1 THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Missing expected data.               ';
+       SELECT;
+         WHEN (CUSTTITL < 1) CUSTTITL = -1;
+         WHEN (CHRISTNL < 1) CHRISTNL = -1;
+         WHEN (CUSTSNL  < 1) CUSTSNL  = -1;
+         WHEN (CUSTAD1L < 1) CUSTAD1L = -1;
+         WHEN (DOBDDL   < 1) DOBDDL   = -1;
+         WHEN (DOBMML   < 1) DOBMML   = -1;
+         WHEN (DOBYYL   < 1) DOBYYL   = -1;
+         OTHERWISE ;
+       END;
+       VALID_DATA_SW = 'N';
+       GOTO ED999;
+     END;
+
+     ED999: ;
+
+   END EDIT_DATA;
+
+
+   /* ============================================================= */
+   /*  CRE_CUST_DATA - CCD010                                         */
+   /* ============================================================= */
+   CRE_CUST_DATA: PROCEDURE;
+
+     DCL CUSTINS_TRIMMED CHAR(2);
+     DCL TEMP_LAST       CHAR(50);
+
+     /* Initialise subpgm parms */
+     SUBPGM_PARMS       = '';
+     SUBPGM_EYECATCHER  = 'CUST';
+     SUBPGM_SUCCESS     = 'N';
+
+     /* Strip underscores */
+     CUSTTITI  = TRANSLATE(CUSTTITI,  ' ', '_');
+     CHRISTNI  = TRANSLATE(CHRISTNI,  ' ', '_');
+     CUSTINSI  = TRANSLATE(CUSTINSI,  ' ', '_');
+     CUSTSNI   = TRANSLATE(CUSTSNI,   ' ', '_');
+     CUSTAD1I  = TRANSLATE(CUSTAD1I,  ' ', '_');
+     CUSTAD2I  = TRANSLATE(CUSTAD2I,  ' ', '_');
+     CITYI     = TRANSLATE(CITYI,     ' ', '_');
+     POSTCODEI = TRANSLATE(POSTCODEI, ' ', '_');
+     COUNTRYI  = TRANSLATE(COUNTRYI,  ' ', '_');
+
+     /* Populate CRECUST commarea via SUBPGM_PARMS */
+     COMM_TITLE      = SUBPGM_TITLE;
+     COMM_TITLE      = CUSTTITI;
+     COMM_FIRST_NAME = CHRISTNI;
+
+     /* Build last name as: initials + space + surname */
+     CUSTINS_TRIMMED = LEFT(CUSTINSI, VERIFY(REVERSE(CUSTINSI),' ')-1,
+                            ' ');
+     IF CUSTINS_TRIMMED = '' THEN
+       COMM_LAST_NAME = CUSTSNI;
+     ELSE
+       COMM_LAST_NAME = CUSTINS_TRIMMED || ' ' || CUSTSNI;
+
+     COMM_ADDR_LINE1 = CUSTAD1I;
+     COMM_ADDR_LINE2 = CUSTAD2I;
+     COMM_CITY       = CITYI;
+     COMM_POSTCODE   = POSTCODEI;
+     COMM_COUNTRY    = COUNTRYI;
+     COMM_PHONE      = ' ';
+     COMM_STATUS     = ' ';
+
+     COMM_DOB_DAY    = DOBDDI;
+     COMM_DOB_MONTH  = DOBMMI;
+     COMM_DOB_YEAR   = DOBYYI;
+
+     /* Map SUBPGM_PARMS fields to CRECUST_COMMAREA */
+     COMM_EYECATCHER = 'CUST';
+     COMM_SUCCESS    = 'N';
+
+     EXEC CICS LINK
+          PROGRAM('CRECUST')
+          COMMAREA(CRECUST_COMMAREA)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2)
+          SYNCONRETURN ;
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       ABNDINFO_REC       = '';
+       ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+       ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+       EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+       ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+       ABND_TRANID        = EIBTRNID;
+       CALL POPULATE_TIME_DATE;
+       ABND_DATE          = WS_ORIG_DATE;
+       ABND_TIME = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                   SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                   SUBSTR(WS_TIME_NOW,5,2);
+       ABND_UTIME_KEY     = WS_U_TIME;
+       ABND_CODE          = 'HBNK';
+       EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+       ABND_SQLCODE       = '0';
+       ABND_FREEFORM =
+         'CCD010 - LINK CRECUST FAIL  ' ||
+         'EIBRESP=' || ABND_RESPCODE ||
+         ' RESP2=' || ABND_RESP2CODE;
+       WS_CA_LEN = SIZE(ABNDINFO_REC);
+       EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                      COMMAREA(ABNDINFO_REC)
+                      LENGTH(WS_CA_LEN) ;
+       WS_CICS_FAIL_MSG =
+         'BNK1CCS - CCD010 - LINK CRECUST FAIL     ';
+       WS_CICS_RESP_DISP  = SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+       WS_CICS_RESP2_DISP = SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+       CALL RESTORE_TERM_DEF;
+       CALL ABEND_THIS_TASK;
+     END;
+
+     /* Check creation outcome */
+     IF COMM_SUCCESS = 'N' THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO =
+         'Sorry but unable to create Customer record ';
+       IF COMM_FAIL_CODE = 'O' THEN
+         MESSAGEO =
+           'Sorry, customer is too old. Please check D.O.B.';
+       IF COMM_FAIL_CODE = 'Y' THEN
+         MESSAGEO =
+           'Sorry, customer D.O.B. is in the future.';
+       IF COMM_FAIL_CODE = 'Z' THEN
+         MESSAGEO =
+           'Sorry, customer D.O.B. is invalid.';
+       VALID_DATA_SW = 'N';
+     END;
+
+     IF COMM_SUCCESS = 'Y' THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO =
+         'The Customer record has been successfully created';
+       SORTCO    = COMM_SORTCODE;
+       CUSTNO2O  = COMM_NUMBER;
+     END;
+
+     /* Populate date/DOB output fields from commarea */
+     DOBYYO   = COMM_DOB_YEAR;
+     DOBMMO   = COMM_DOB_MONTH;
+     DOBDDO   = COMM_DOB_DAY;
+     CUSTAD1O = COMM_ADDR_LINE1;
+     CUSTAD2O = COMM_ADDR_LINE2;
+     CITYO    = COMM_CITY;
+     POSTCODEO = COMM_POSTCODE;
+     COUNTRYO = COMM_COUNTRY;
+     CREDSCO  = SUBSTR(CHAR(COMM_CREDIT_SCORE,3), 1, 3);
+     SCRDTDDO = COMM_CS_REVIEW_DAY;
+     SCRDTMMO = COMM_CS_REVIEW_MONTH;
+     SCRDTYYO = COMM_CS_REVIEW_YEAR;
+
+   END CRE_CUST_DATA;
+
+
+   /* ============================================================= */
+   /*  STORE_TERM_DEF - STD010                                        */
+   /* ============================================================= */
+   STORE_TERM_DEF: PROCEDURE;
+
+     EXEC CICS INQUIRE
+          TERMINAL(EIBTRMID)
+          UCTRANST(WS_UCTRANS)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+
+     STORED_UCTRANS = WS_UCTRANS;
+
+     IF WS_UCTRANS = DFHVALUE(UCTRAN) |
+        WS_UCTRANS = DFHVALUE(TRANIDONLY) THEN DO;
+       WS_UCTRANS = DFHVALUE(NOUCTRAN);
+       EXEC CICS SET TERMINAL(EIBTRMID)
+            UCTRANST(WS_UCTRANS)
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         ABNDINFO_REC       = '';
+         ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+         ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+         EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+         ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+         ABND_TRANID        = EIBTRNID;
+         CALL POPULATE_TIME_DATE;
+         ABND_DATE          = WS_ORIG_DATE;
+         ABND_TIME = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                     SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                     SUBSTR(WS_TIME_NOW,5,2);
+         ABND_UTIME_KEY     = WS_U_TIME;
+         ABND_CODE          = 'HBNK';
+         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+         ABND_SQLCODE       = '0';
+         ABND_FREEFORM =
+           'STD010 - SET TERMINAL UC FAIL' ||
+           'EIBRESP=' || ABND_RESPCODE ||
+           ' RESP2=' || ABND_RESP2CODE;
+         WS_CA_LEN = SIZE(ABNDINFO_REC);
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                        COMMAREA(ABNDINFO_REC)
+                        LENGTH(WS_CA_LEN) ;
+         WS_CICS_FAIL_MSG =
+           'BNK1CCS - STD010 - SET TERMINAL UC FAIL';
+         WS_CICS_RESP_DISP  = SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+         WS_CICS_RESP2_DISP = SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+         CALL RESTORE_TERM_DEF;
+         CALL ABEND_THIS_TASK;
+       END;
+     END;
+
+   END STORE_TERM_DEF;
+
+   /* ============================================================= */
+   /*  RESTORE_TERM_DEF - RTD010                                      */
+   /* ============================================================= */
+   RESTORE_TERM_DEF: PROCEDURE;
+
+     WS_COMM_AREA = DFHCOMMAREA;
+     WS_UCTRANS   = WS_COMM_TERM;
+
+     EXEC CICS SET TERMINAL(EIBTRMID)
+          UCTRANST(WS_UCTRANS)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       ABNDINFO_REC       = '';
+       ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+       ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+       EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+       ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+       ABND_TRANID        = EIBTRNID;
+       CALL POPULATE_TIME_DATE;
+       ABND_DATE          = WS_ORIG_DATE;
+       ABND_TIME = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                   SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                   SUBSTR(WS_TIME_NOW,5,2);
+       ABND_UTIME_KEY     = WS_U_TIME;
+       ABND_CODE          = 'HBNK';
+       EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+       ABND_SQLCODE       = '0';
+       ABND_FREEFORM =
+         'RTD010 - SET TERMINAL UC FAIL' ||
+         'EIBRESP=' || ABND_RESPCODE ||
+         ' RESP2=' || ABND_RESP2CODE;
+       WS_CA_LEN = SIZE(ABNDINFO_REC);
+       EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                      COMMAREA(ABNDINFO_REC)
+                      LENGTH(WS_CA_LEN) ;
+       WS_CICS_FAIL_MSG =
+         'BNK1CCS - RTD010 - SET TERMINAL UC FAIL';
+       WS_CICS_RESP_DISP  = SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+       WS_CICS_RESP2_DISP = SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+       CALL ABEND_THIS_TASK;
+     END;
+
+   END RESTORE_TERM_DEF;
+
+
+   /* ============================================================= */
+   /*  SEND_MAP - SM010                                               */
+   /* ============================================================= */
+   SEND_MAP: PROCEDURE;
+
+     IF SEND_FLAG = SEND_ERASE_C THEN DO;
+       EXEC CICS SEND
+            MAP('BNK1CC')
+            MAPSET('BNK1CCM')
+            FROM(BNK1CCO)
+            ERASE
+            CURSOR
+            FREEKB
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         ABNDINFO_REC       = '';
+         ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+         ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+         EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+         ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+         ABND_TRANID        = EIBTRNID;
+         CALL POPULATE_TIME_DATE;
+         ABND_DATE          = WS_ORIG_DATE;
+         ABND_TIME = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                     SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                     SUBSTR(WS_TIME_NOW,5,2);
+         ABND_UTIME_KEY     = WS_U_TIME;
+         ABND_CODE          = 'HBNK';
+         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+         ABND_SQLCODE       = '0';
+         ABND_FREEFORM =
+           'SM010 - SEND MAP ERASE FAIL' ||
+           'EIBRESP=' || ABND_RESPCODE ||
+           ' RESP2=' || ABND_RESP2CODE;
+         WS_CA_LEN = SIZE(ABNDINFO_REC);
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                        COMMAREA(ABNDINFO_REC)
+                        LENGTH(WS_CA_LEN) ;
+         WS_CICS_FAIL_MSG =
+           'BNK1CCS - SM010 - SEND MAP ERASE FAIL ';
+         WS_CICS_RESP_DISP  = SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+         WS_CICS_RESP2_DISP = SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+         CALL RESTORE_TERM_DEF;
+         CALL ABEND_THIS_TASK;
+       END;
+       GOTO SM_DONE;
+     END;
+
+     IF SEND_FLAG = SEND_DATAONLY_C THEN DO;
+       EXEC CICS SEND
+            MAP('BNK1CC')
+            MAPSET('BNK1CCM')
+            FROM(BNK1CCO)
+            DATAONLY
+            CURSOR
+            FREEKB
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         ABNDINFO_REC       = '';
+         ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+         ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+         EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+         ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+         ABND_TRANID        = EIBTRNID;
+         CALL POPULATE_TIME_DATE;
+         ABND_DATE          = WS_ORIG_DATE;
+         ABND_TIME = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                     SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                     SUBSTR(WS_TIME_NOW,5,2);
+         ABND_UTIME_KEY     = WS_U_TIME;
+         ABND_CODE          = 'HBNK';
+         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+         ABND_SQLCODE       = '0';
+         ABND_FREEFORM =
+           'SM010 - SEND MAP DATAONLY FAIL' ||
+           'EIBRESP=' || ABND_RESPCODE ||
+           ' RESP2=' || ABND_RESP2CODE;
+         WS_CA_LEN = SIZE(ABNDINFO_REC);
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                        COMMAREA(ABNDINFO_REC)
+                        LENGTH(WS_CA_LEN) ;
+         WS_CICS_FAIL_MSG =
+           'BNK1CCS - SM010 - SEND MAP DATAONLY FAIL ';
+         WS_CICS_RESP_DISP  = SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+         WS_CICS_RESP2_DISP = SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+         CALL RESTORE_TERM_DEF;
+         CALL ABEND_THIS_TASK;
+       END;
+       GOTO SM_DONE;
+     END;
+
+     IF SEND_FLAG = SEND_DATAONLY_ALARM_C THEN DO;
+       EXEC CICS SEND
+            MAP('BNK1CC')
+            MAPSET('BNK1CCM')
+            FROM(BNK1CCO)
+            ALARM
+            DATAONLY
+            CURSOR
+            FREEKB
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         ABNDINFO_REC       = '';
+         ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+         ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+         EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+         ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+         ABND_TRANID        = EIBTRNID;
+         CALL POPULATE_TIME_DATE;
+         ABND_DATE          = WS_ORIG_DATE;
+         ABND_TIME = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                     SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                     SUBSTR(WS_TIME_NOW,5,2);
+         ABND_UTIME_KEY     = WS_U_TIME;
+         ABND_CODE          = 'HBNK';
+         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+         ABND_SQLCODE       = '0';
+         ABND_FREEFORM =
+           'SM010 - SEND MAP DATAONLY ALARM FAIL' ||
+           'EIBRESP=' || ABND_RESPCODE ||
+           ' RESP2=' || ABND_RESP2CODE;
+         WS_CA_LEN = SIZE(ABNDINFO_REC);
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                        COMMAREA(ABNDINFO_REC)
+                        LENGTH(WS_CA_LEN) ;
+         WS_CICS_FAIL_MSG =
+           'BNK1CCS - SM010 - SEND MAP DATAONLY ALARM FAIL';
+         WS_CICS_RESP_DISP  = SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+         WS_CICS_RESP2_DISP = SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+         CALL RESTORE_TERM_DEF;
+         CALL ABEND_THIS_TASK;
+       END;
+     END;
+
+     SM_DONE: ;
+
+   END SEND_MAP;
+
+
+   /* ============================================================= */
+   /*  SEND_TERMINATION_MSG - STM010                                  */
+   /* ============================================================= */
+   SEND_TERMINATION_MSG: PROCEDURE;
+
+     EXEC CICS SEND TEXT
+          FROM(END_OF_SESSION_MESSAGE)
+          ERASE
+          FREEKB
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       ABNDINFO_REC       = '';
+       ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+       ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+       EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+       ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+       ABND_TRANID        = EIBTRNID;
+       CALL POPULATE_TIME_DATE;
+       ABND_DATE          = WS_ORIG_DATE;
+       ABND_TIME = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                   SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                   SUBSTR(WS_TIME_NOW,5,2);
+       ABND_UTIME_KEY     = WS_U_TIME;
+       ABND_CODE          = 'HBNK';
+       EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+       ABND_SQLCODE       = '0';
+       ABND_FREEFORM =
+         'STM010 - SEND TEXT FAIL' ||
+         'EIBRESP=' || ABND_RESPCODE ||
+         ' RESP2=' || ABND_RESP2CODE;
+       WS_CA_LEN = SIZE(ABNDINFO_REC);
+       EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                      COMMAREA(ABNDINFO_REC)
+                      LENGTH(WS_CA_LEN) ;
+       WS_CICS_FAIL_MSG =
+         'BNK1CCS - STM010 - SEND TEXT FAIL';
+       WS_CICS_RESP_DISP  = SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+       WS_CICS_RESP2_DISP = SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+       CALL RESTORE_TERM_DEF;
+       CALL ABEND_THIS_TASK;
+     END;
+
+   END SEND_TERMINATION_MSG;
+
+   /* ============================================================= */
+   /*  ABEND_THIS_TASK - ATT010                                       */
+   /* ============================================================= */
+   ABEND_THIS_TASK: PROCEDURE;
+
+     /* Restore terminal UCTRAN */
+     WS_COMM_AREA = DFHCOMMAREA;
+     WS_UCTRANS   = WS_COMM_TERM;
+     EXEC CICS SET TERMINAL(EIBTRMID)
+          UCTRANST(WS_UCTRANS)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+
+     PUT SKIP LIST(WS_FAIL_INFO);
+     EXEC CICS ABEND
+          ABCODE('HBNK')
+          NODUMP
+          CANCEL ;
+
+   END ABEND_THIS_TASK;
+
+   /* ============================================================= */
+   /*  POPULATE_TIME_DATE - PTD010                                    */
+   /* ============================================================= */
+   POPULATE_TIME_DATE: PROCEDURE;
+
+     EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+
+     EXEC CICS FORMATTIME
+          ABSTIME(WS_U_TIME)
+          DDMMYYYY(WS_ORIG_DATE)
+          TIME(WS_TIME_NOW)
+          DATESEP ;
+
+   END POPULATE_TIME_DATE;
+
+   /* ============================================================= */
+   /*  ABEND_HANDLING - CICS abend handler label (HA010)              */
+   /* ============================================================= */
+   ABEND_HANDLING:
+     WS_COMM_AREA = DFHCOMMAREA;
+     WS_UCTRANS   = WS_COMM_TERM;
+     EXEC CICS SET TERMINAL(EIBTRMID)
+          UCTRANST(WS_UCTRANS)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+     EXEC CICS ASSIGN ABCODE(WS_ABCODE) ;
+     EXEC CICS HANDLE ABEND CANCEL ;
+     EXEC CICS ABEND ABCODE(WS_ABCODE) NODUMP ;
+
+ END BNK1CCS;

@@ -1,0 +1,533 @@
+ *PROCESS CICS,SQL;
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                         */
+ /* ----------------------------------------------------------------- */
+ /*  INQCUST - Enquire Customer                                       */
+ /*                                                                   */
+ /*  Takes customer number as input and returns all customer          */
+ /*  information for that record via a DB2 SELECT.                    */
+ /*  Handles 0000000000 (random) and 9999999999 (last) customer.      */
+ /*  If any error occurs the program abends.                          */
+ /* ----------------------------------------------------------------- */
+ INQCUST: PROCEDURE OPTIONS(MAIN REENTRANT);
+
+   /* ----------------------------------------------------------------*/
+   /*  SQLCA - must be first EXEC SQL statement                       */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL INCLUDE SQLCA;
+
+   /* ----------------------------------------------------------------*/
+   /*  CUSTOMER table declaration                                     */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL DECLARE CUSTOMER TABLE
+     ( CUSTOMER_EYECATCHER       CHAR(4),
+       CUSTOMER_SORTCODE         CHAR(6)    NOT NULL,
+       CUSTOMER_NUMBER           CHAR(10)   NOT NULL,
+       CUSTOMER_TITLE            CHAR(10),
+       CUSTOMER_FIRST_NAME       CHAR(50),
+       CUSTOMER_LAST_NAME        CHAR(50),
+       CUSTOMER_DATE_OF_BIRTH    INTEGER,
+       CUSTOMER_PHONE            CHAR(20),
+       CUSTOMER_ADDR_LINE1       CHAR(50),
+       CUSTOMER_ADDR_LINE2       CHAR(50),
+       CUSTOMER_CITY             CHAR(50),
+       CUSTOMER_POSTCODE         CHAR(10),
+       CUSTOMER_COUNTRY          CHAR(50),
+       CUSTOMER_STATUS           CHAR(10),
+       CUSTOMER_CREATED_DATE     INTEGER,
+       CUSTOMER_CREDIT_SCORE     SMALLINT,
+       CUSTOMER_CS_REVIEW_DATE   INTEGER );
+
+   /* ----------------------------------------------------------------*/
+   /*  Sort code constant                                             */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE SORTCODE;
+
+   /* ----------------------------------------------------------------*/
+   /*  DB2 host variables for CUSTOMER table                          */
+   /* ----------------------------------------------------------------*/
+   DCL HV_CUSTOMER_EYECATCHER      CHAR(4);
+   DCL HV_CUSTOMER_SORTCODE        CHAR(6);
+   DCL HV_CUSTOMER_NUMBER          CHAR(10);
+   DCL HV_CUSTOMER_TITLE           CHAR(10);
+   DCL HV_CUSTOMER_FIRST_NAME      CHAR(50);
+   DCL HV_CUSTOMER_LAST_NAME       CHAR(50);
+   DCL HV_CUSTOMER_DOB             FIXED BIN(31);
+   DCL HV_CUSTOMER_PHONE           CHAR(20);
+   DCL HV_CUSTOMER_ADDR_LINE1      CHAR(50);
+   DCL HV_CUSTOMER_ADDR_LINE2      CHAR(50);
+   DCL HV_CUSTOMER_CITY            CHAR(50);
+   DCL HV_CUSTOMER_POSTCODE        CHAR(10);
+   DCL HV_CUSTOMER_COUNTRY         CHAR(50);
+   DCL HV_CUSTOMER_STATUS          CHAR(10);
+   DCL HV_CUSTOMER_CREATE_DATE     FIXED BIN(31);
+   DCL HV_CUSTOMER_CREDIT_SCORE    FIXED BIN(15);
+   DCL HV_CUSTOMER_CS_REVIEW_DATE  FIXED BIN(31);
+
+   /* ----------------------------------------------------------------*/
+   /*  CICS response codes                                            */
+   /* ----------------------------------------------------------------*/
+   DCL WS_CICS_RESP               FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2              FIXED BIN(31) INIT(0);
+
+   /* ----------------------------------------------------------------*/
+   /*  Miscellaneous work variables                                   */
+   /* ----------------------------------------------------------------*/
+   DCL WS_STORM_DRAIN              CHAR(1)  INIT('N');
+   DCL STORM_DRAIN_CONDITION       CHAR(20);
+   DCL SQLCODE_DISPLAY             FIXED BIN(31);
+   DCL MY_ABEND_CODE               CHAR(4);
+   DCL WS_ABEND_PGM                CHAR(8)  INIT('ABNDPROC');
+   DCL WS_CA_LEN                   FIXED BIN(15);
+
+   /* Required sort code and customer number for DB2 query */
+   DCL REQUIRED_SORT_CODE          CHAR(6)  INIT('000000');
+   DCL REQUIRED_CUST_NUMBER        CHAR(10) INIT('0000000000');
+   DCL REQUIRED_SORT_CODE2         CHAR(6)  INIT('000000');
+   DCL REQUIRED_CUST_NUMBER2       CHAR(10) INIT('0000000000');
+
+   /* NCS customer number stuff */
+   DCL 1 NCS_CUST_NO_STUFF,
+         2 NCS_CUST_NO_NAME,
+           3 NCS_CUST_NO_ACT_NAME  CHAR(8)  INIT('HBNKCUST'),
+           3 NCS_CUST_NO_TEST_SORT CHAR(6)  INIT('      '),
+           3 NCS_CUST_NO_FILL      CHAR(2)  INIT('  '),
+         2 NCS_CUST_NO_INC         FIXED BIN(63) INIT(0),
+         2 NCS_CUST_NO_VALUE       FIXED BIN(63) INIT(0),
+         2 NCS_CUST_NO_RESP        CHAR(2)  INIT('00');
+
+   /* Exit flags */
+   DCL EXIT_DB2_READ               CHAR(1)  INIT('N');
+   DCL WS_V_RETRIED                CHAR(1)  INIT('N');
+   DCL INQCUST_RETRY               FIXED BIN(31) INIT(0);
+   DCL RANDOM_CUSTOMER             CHAR(10) INIT('0000000000');
+
+   /* Time / date working storage */
+   DCL WS_U_TIME                   FIXED DEC(15,0) INIT(0);
+   DCL WS_ORIG_DATE                CHAR(10);
+   DCL WS_TIME_NOW                 CHAR(6);
+
+   /* ----------------------------------------------------------------*/
+   /*  Abend info record                                              */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE ABNDINFO;
+
+   /* ----------------------------------------------------------------*/
+   /*  COMMAREA (INQCUST interface)                                   */
+   /* ----------------------------------------------------------------*/
+   DCL COMMAREA_PTR                POINTER;
+   %INCLUDE INQCUSTZ;
+   DCL 1 DFHCOMMAREA BASED(COMMAREA_PTR)
+                     LIKE INQCUST_COMMAREA;
+
+   /* ================================================================*/
+   /*  MAIN PROCEDURE LOGIC                                           */
+   /* ================================================================*/
+
+   /* Set up abend handler */
+   EXEC CICS HANDLE ABEND LABEL(ABEND_HANDLING) ;
+
+   /* Get the COMMAREA address */
+   EXEC CICS ADDRESS
+        COMMAREA(COMMAREA_PTR)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   INQCUST_INQ_SUCCESS = 'N';
+   INQCUST_INQ_FAIL_CD = '0';
+
+   /* Set sort code from COMMAREA or default */
+   IF INQCUST_SCODE = ' ' | INQCUST_SCODE = '' THEN
+     REQUIRED_SORT_CODE = SORTCODE;
+   ELSE
+     REQUIRED_SORT_CODE = INQCUST_SCODE;
+
+   REQUIRED_CUST_NUMBER = INQCUST_CUSTNO;
+
+   /* Handle 0 (random) or 9's (last) customer number */
+   IF INQCUST_CUSTNO = '0000000000' |
+      INQCUST_CUSTNO = '9999999999' THEN DO;
+     CALL READ_CUSTOMER_NCS;
+     IF INQCUST_INQ_SUCCESS = 'Y' THEN
+       REQUIRED_CUST_NUMBER = CHAR(NCS_CUST_NO_VALUE, 10);
+     ELSE
+       CALL GET_ME_OUT_OF_HERE;
+   END;
+
+   /* For random: compute a random customer number */
+   IF INQCUST_CUSTNO = '0000000000' THEN DO;
+     CALL GENERATE_RANDOM_CUSTOMER;
+     REQUIRED_CUST_NUMBER = RANDOM_CUSTOMER;
+   END;
+
+   EXIT_DB2_READ = 'N';
+   WS_V_RETRIED  = 'N';
+
+   DO WHILE (EXIT_DB2_READ = 'N');
+     CALL READ_CUSTOMER_DB2;
+   END;
+
+   /* Copy results to COMMAREA if successful */
+   IF INQCUST_INQ_SUCCESS = 'Y' THEN DO;
+     INQCUST_INQ_FAIL_CD  = '0';
+     INQCUST_EYE          = HV_CUSTOMER_EYECATCHER;
+     INQCUST_SCODE        = HV_CUSTOMER_SORTCODE;
+     INQCUST_CUSTNO       = HV_CUSTOMER_NUMBER;
+     INQCUST_TITLE        = HV_CUSTOMER_TITLE;
+     INQCUST_FIRST_NAME   = HV_CUSTOMER_FIRST_NAME;
+     INQCUST_LAST_NAME    = HV_CUSTOMER_LAST_NAME;
+     /* DOB stored as YYYYMMDD integer - break out DD, MM, YYYY */
+     INQCUST_DOB_DD   = SUBSTR(CHAR(HV_CUSTOMER_DOB, 8), 7, 2);
+     INQCUST_DOB_MM   = SUBSTR(CHAR(HV_CUSTOMER_DOB, 8), 5, 2);
+     INQCUST_DOB_YYYY = SUBSTR(CHAR(HV_CUSTOMER_DOB, 8), 1, 4);
+     INQCUST_PHONE        = HV_CUSTOMER_PHONE;
+     INQCUST_ADDR_LINE1   = HV_CUSTOMER_ADDR_LINE1;
+     INQCUST_ADDR_LINE2   = HV_CUSTOMER_ADDR_LINE2;
+     INQCUST_CITY         = HV_CUSTOMER_CITY;
+     INQCUST_POSTCODE     = HV_CUSTOMER_POSTCODE;
+     INQCUST_COUNTRY      = HV_CUSTOMER_COUNTRY;
+     INQCUST_STATUS       = HV_CUSTOMER_STATUS;
+     /* Created date stored as YYYYMMDD integer */
+  INQCUST_CREATED_DD   = SUBSTR(CHAR(HV_CUSTOMER_CREATE_DATE, 8), 7, 2);
+  INQCUST_CREATED_MM   = SUBSTR(CHAR(HV_CUSTOMER_CREATE_DATE, 8), 5, 2);
+  INQCUST_CREATED_YYYY = SUBSTR(CHAR(HV_CUSTOMER_CREATE_DATE, 8), 1, 4);
+     INQCUST_CREDIT_SCORE = HV_CUSTOMER_CREDIT_SCORE;
+     /* CS review date stored as YYYYMMDD integer */
+  INQCUST_CS_REVIEW_DD   =
+     SUBSTR(CHAR(HV_CUSTOMER_CS_REVIEW_DATE,8),7,2);
+  INQCUST_CS_REVIEW_MM   =
+     SUBSTR(CHAR(HV_CUSTOMER_CS_REVIEW_DATE,8),5,2);
+  INQCUST_CS_REVIEW_YYYY =
+     SUBSTR(CHAR(HV_CUSTOMER_CS_REVIEW_DATE,8),1,4);
+   END;
+
+   CALL GET_ME_OUT_OF_HERE;
+
+ /* ------------------------------------------------------------------*/
+ /*  READ_CUSTOMER_NCS - Get last customer number from DB2            */
+ /* ------------------------------------------------------------------*/
+ READ_CUSTOMER_NCS: PROCEDURE;
+
+   CALL GET_LAST_CUSTOMER_DB2;
+   IF INQCUST_INQ_SUCCESS = 'Y' THEN
+     NCS_CUST_NO_VALUE = BIN(REQUIRED_CUST_NUMBER2, 63);
+
+ END READ_CUSTOMER_NCS;
+
+ /* ------------------------------------------------------------------*/
+ /*  READ_CUSTOMER_DB2 - SELECT customer row from DB2                 */
+ /* ------------------------------------------------------------------*/
+ READ_CUSTOMER_DB2: PROCEDURE;
+
+   HV_CUSTOMER_EYECATCHER    = ' ';
+   HV_CUSTOMER_SORTCODE      = ' ';
+   HV_CUSTOMER_NUMBER        = ' ';
+   HV_CUSTOMER_TITLE         = ' ';
+   HV_CUSTOMER_FIRST_NAME    = ' ';
+   HV_CUSTOMER_LAST_NAME     = ' ';
+   HV_CUSTOMER_DOB           = 0;
+   HV_CUSTOMER_PHONE         = ' ';
+   HV_CUSTOMER_ADDR_LINE1    = ' ';
+   HV_CUSTOMER_ADDR_LINE2    = ' ';
+   HV_CUSTOMER_CITY          = ' ';
+   HV_CUSTOMER_POSTCODE      = ' ';
+   HV_CUSTOMER_COUNTRY       = ' ';
+   HV_CUSTOMER_STATUS        = ' ';
+   HV_CUSTOMER_CREATE_DATE   = 0;
+   HV_CUSTOMER_CREDIT_SCORE  = 0;
+   HV_CUSTOMER_CS_REVIEW_DATE= 0;
+
+   HV_CUSTOMER_SORTCODE = REQUIRED_SORT_CODE;
+   HV_CUSTOMER_NUMBER   = REQUIRED_CUST_NUMBER;
+
+   EXEC SQL
+     SELECT CUSTOMER_EYECATCHER,
+            CUSTOMER_SORTCODE,
+            CUSTOMER_NUMBER,
+            CUSTOMER_TITLE,
+            CUSTOMER_FIRST_NAME,
+            CUSTOMER_LAST_NAME,
+            CUSTOMER_DATE_OF_BIRTH,
+            CUSTOMER_PHONE,
+            CUSTOMER_ADDR_LINE1,
+            CUSTOMER_ADDR_LINE2,
+            CUSTOMER_CITY,
+            CUSTOMER_POSTCODE,
+            CUSTOMER_COUNTRY,
+            CUSTOMER_STATUS,
+            CUSTOMER_CREATED_DATE,
+            CUSTOMER_CREDIT_SCORE,
+            CUSTOMER_CS_REVIEW_DATE
+       INTO :HV_CUSTOMER_EYECATCHER,
+            :HV_CUSTOMER_SORTCODE,
+            :HV_CUSTOMER_NUMBER,
+            :HV_CUSTOMER_TITLE,
+            :HV_CUSTOMER_FIRST_NAME,
+            :HV_CUSTOMER_LAST_NAME,
+            :HV_CUSTOMER_DOB,
+            :HV_CUSTOMER_PHONE,
+            :HV_CUSTOMER_ADDR_LINE1,
+            :HV_CUSTOMER_ADDR_LINE2,
+            :HV_CUSTOMER_CITY,
+            :HV_CUSTOMER_POSTCODE,
+            :HV_CUSTOMER_COUNTRY,
+            :HV_CUSTOMER_STATUS,
+            :HV_CUSTOMER_CREATE_DATE,
+            :HV_CUSTOMER_CREDIT_SCORE,
+            :HV_CUSTOMER_CS_REVIEW_DATE
+       FROM CUSTOMER
+      WHERE CUSTOMER_SORTCODE = :HV_CUSTOMER_SORTCODE
+        AND CUSTOMER_NUMBER   = :HV_CUSTOMER_NUMBER ;
+
+   IF SQLCODE = 0 THEN DO;
+     EXIT_DB2_READ       = 'Y';
+     INQCUST_INQ_SUCCESS = 'Y';
+     RETURN;
+   END;
+
+   /* Not found but input was random - try again up to 1000 times */
+   IF SQLCODE = 100 & INQCUST_CUSTNO = '0000000000' THEN DO;
+     IF INQCUST_RETRY < 1000 THEN DO;
+       CALL GENERATE_RANDOM_CUSTOMER_AGAIN;
+       REQUIRED_CUST_NUMBER = RANDOM_CUSTOMER;
+       RETURN;
+     END;
+     ELSE DO;
+       EXIT_DB2_READ       = 'Y';
+       INQCUST_INQ_SUCCESS = 'N';
+       INQCUST_INQ_FAIL_CD = '1';
+       RETURN;
+     END;
+   END;
+
+   /* Not found but input was 9999999999 - fetch last customer */
+  IF SQLCODE = 100 & INQCUST_CUSTNO = '9999999999' &
+     WS_V_RETRIED = 'N' THEN DO;
+     CALL GET_LAST_CUSTOMER_DB2;
+     REQUIRED_CUST_NUMBER = REQUIRED_CUST_NUMBER2;
+     WS_V_RETRIED         = 'Y';
+     RETURN;
+   END;
+
+   /* Not found for an explicit customer number */
+   IF SQLCODE = 100 &
+      INQCUST_CUSTNO ^= '9999999999' &
+      INQCUST_CUSTNO ^= '0000000000' THEN DO;
+     REQUIRED_CUST_NUMBER = HV_CUSTOMER_NUMBER;
+     EXIT_DB2_READ        = 'Y';
+     INQCUST_INQ_SUCCESS  = 'N';
+     INQCUST_INQ_FAIL_CD  = '1';
+     INQCUST_TITLE        = ' ';
+     INQCUST_FIRST_NAME   = ' ';
+     INQCUST_LAST_NAME    = ' ';
+     INQCUST_PHONE        = ' ';
+     INQCUST_ADDR_LINE1   = ' ';
+     INQCUST_ADDR_LINE2   = ' ';
+     INQCUST_CITY         = ' ';
+     INQCUST_POSTCODE     = ' ';
+     INQCUST_COUNTRY      = ' ';
+     INQCUST_STATUS       = ' ';
+     RETURN;
+   END;
+
+   /* Any other SQL error - abend */
+   IF SQLCODE ^= 0 & SQLCODE ^= 100 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+     ABNDINFO_REC       = '' ;
+     ABND_SQLCODE       = SUBSTR(CHAR(SQLCODE_DISPLAY), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID        = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE          = WS_ORIG_DATE;
+     ABND_TIME          = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                          SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                          SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY     = WS_U_TIME;
+     ABND_CODE          = 'CVR1';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_FREEFORM      = 'RCD010 - CUSTOMER DB2 SELECT KEY=' ||
+                          REQUIRED_SORT_CODE || REQUIRED_CUST_NUMBER ||
+                          ' GAVE SQLCODE=' || CHAR(SQLCODE_DISPLAY);
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     PUT SKIP LIST('CUSTOMER DB2 SELECT KEY=' || REQUIRED_SORT_CODE ||
+                   REQUIRED_CUST_NUMBER ||
+                   ' GAVE SQLCODE=' || CHAR(SQLCODE_DISPLAY));
+     EXEC CICS ABEND ABCODE('CVR1') CANCEL NODUMP ;
+   END;
+
+ END READ_CUSTOMER_DB2;
+
+ /* ------------------------------------------------------------------*/
+ /*  GET_ME_OUT_OF_HERE - Return control to CICS                      */
+ /* ------------------------------------------------------------------*/
+ GET_ME_OUT_OF_HERE: PROCEDURE;
+
+   EXEC CICS RETURN ;
+
+ END GET_ME_OUT_OF_HERE;
+
+ /* ------------------------------------------------------------------*/
+ /*  GET_LAST_CUSTOMER_DB2 - Get highest customer number from DB2     */
+ /* ------------------------------------------------------------------*/
+ GET_LAST_CUSTOMER_DB2: PROCEDURE;
+
+   REQUIRED_SORT_CODE2    = REQUIRED_SORT_CODE;
+   HV_CUSTOMER_SORTCODE   = REQUIRED_SORT_CODE2;
+
+   EXEC SQL
+     SELECT CUSTOMER_EYECATCHER,
+            CUSTOMER_SORTCODE,
+            CUSTOMER_NUMBER,
+            CUSTOMER_TITLE,
+            CUSTOMER_FIRST_NAME,
+            CUSTOMER_LAST_NAME,
+            CUSTOMER_DATE_OF_BIRTH,
+            CUSTOMER_PHONE,
+            CUSTOMER_ADDR_LINE1,
+            CUSTOMER_ADDR_LINE2,
+            CUSTOMER_CITY,
+            CUSTOMER_POSTCODE,
+            CUSTOMER_COUNTRY,
+            CUSTOMER_STATUS,
+            CUSTOMER_CREATED_DATE,
+            CUSTOMER_CREDIT_SCORE,
+            CUSTOMER_CS_REVIEW_DATE
+       INTO :HV_CUSTOMER_EYECATCHER,
+            :HV_CUSTOMER_SORTCODE,
+            :HV_CUSTOMER_NUMBER,
+            :HV_CUSTOMER_TITLE,
+            :HV_CUSTOMER_FIRST_NAME,
+            :HV_CUSTOMER_LAST_NAME,
+            :HV_CUSTOMER_DOB,
+            :HV_CUSTOMER_PHONE,
+            :HV_CUSTOMER_ADDR_LINE1,
+            :HV_CUSTOMER_ADDR_LINE2,
+            :HV_CUSTOMER_CITY,
+            :HV_CUSTOMER_POSTCODE,
+            :HV_CUSTOMER_COUNTRY,
+            :HV_CUSTOMER_STATUS,
+            :HV_CUSTOMER_CREATE_DATE,
+            :HV_CUSTOMER_CREDIT_SCORE,
+            :HV_CUSTOMER_CS_REVIEW_DATE
+       FROM CUSTOMER
+      WHERE CUSTOMER_SORTCODE = :HV_CUSTOMER_SORTCODE
+      ORDER BY CUSTOMER_NUMBER DESC
+      FETCH FIRST 1 ROW ONLY ;
+
+   IF SQLCODE = 0 THEN DO;
+     INQCUST_INQ_SUCCESS  = 'Y';
+     REQUIRED_CUST_NUMBER2= HV_CUSTOMER_NUMBER;
+     RETURN;
+   END;
+
+   IF SQLCODE = 100 THEN DO;
+     INQCUST_INQ_SUCCESS  = 'N';
+     INQCUST_INQ_FAIL_CD  = '9';
+     RETURN;
+   END;
+
+   INQCUST_INQ_SUCCESS  = 'N';
+   INQCUST_INQ_FAIL_CD  = '9';
+
+ END GET_LAST_CUSTOMER_DB2;
+
+ /* ------------------------------------------------------------------*/
+ /*  GENERATE_RANDOM_CUSTOMER - Compute a random customer number      */
+ /* ------------------------------------------------------------------*/
+ GENERATE_RANDOM_CUSTOMER: PROCEDURE;
+
+   DCL WS_RAND_NUM FLOAT BIN(53);
+   INQCUST_RETRY = 0;
+   WS_RAND_NUM   = RANDOM(EIBTASKN);
+   RANDOM_CUSTOMER = SUBSTR(CHAR((NCS_CUST_NO_VALUE - 1) *
+                     WS_RAND_NUM + 1, 10), 1, 10);
+
+ END GENERATE_RANDOM_CUSTOMER;
+
+ /* ------------------------------------------------------------------*/
+ /*  GENERATE_RANDOM_CUSTOMER_AGAIN - Retry random customer           */
+ /* ------------------------------------------------------------------*/
+ GENERATE_RANDOM_CUSTOMER_AGAIN: PROCEDURE;
+
+   DCL WS_RAND_NUM FLOAT BIN(53);
+   INQCUST_RETRY = INQCUST_RETRY + 1;
+   WS_RAND_NUM   = RANDOM();
+   RANDOM_CUSTOMER = SUBSTR(CHAR((NCS_CUST_NO_VALUE - 1) *
+                     WS_RAND_NUM + 1, 10), 1, 10);
+
+ END GENERATE_RANDOM_CUSTOMER_AGAIN;
+
+ /* ------------------------------------------------------------------*/
+ /*  POPULATE_TIME_DATE - Get current date and time via CICS          */
+ /* ------------------------------------------------------------------*/
+ POPULATE_TIME_DATE: PROCEDURE;
+
+   EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+
+   EXEC CICS FORMATTIME
+        ABSTIME(WS_U_TIME)
+        DDMMYYYY(WS_ORIG_DATE)
+        TIME(WS_TIME_NOW)
+        DATESEP ;
+
+ END POPULATE_TIME_DATE;
+
+ /* ------------------------------------------------------------------*/
+ /*  ABEND_HANDLING - Handle CICS abends                              */
+ /* ------------------------------------------------------------------*/
+ ABEND_HANDLING:
+   EXEC CICS ASSIGN ABCODE(MY_ABEND_CODE) ;
+
+   SELECT (MY_ABEND_CODE);
+     WHEN ('AFCR') ;  /* fall through */
+     WHEN ('AFCS') ;  /* fall through */
+     WHEN ('AFCT') DO;
+       WS_STORM_DRAIN = 'Y';
+       PUT SKIP LIST('INQCUST: Check-For-Storm-Drain-VSAM: Storm ' ||
+                     'Drain condition (Abend ' || MY_ABEND_CODE ||
+                     ') has been met.');
+       EXEC CICS SYNCPOINT ROLLBACK
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         ABNDINFO_REC       = '' ;
+         ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+         ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+         EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+         ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+         ABND_TRANID        = EIBTRNID;
+         CALL POPULATE_TIME_DATE;
+         ABND_DATE          = WS_ORIG_DATE;
+         ABND_TIME          = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                              SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                              SUBSTR(WS_TIME_NOW,5,2);
+         ABND_UTIME_KEY     = WS_U_TIME;
+         ABND_CODE          = 'HROL';
+         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+         ABND_SQLCODE       = '0';
+         ABND_FREEFORM      = 'AH010 -Unable to perform SYNCPOINT ' ||
+                              'ROLLBACK. Possible integrity issue ' ||
+                              'following VSAM RLS abend.' ||
+                              ' EIBRESP=' || ABND_RESPCODE ||
+                              ' RESP2=' || ABND_RESP2CODE;
+         WS_CA_LEN = SIZE(ABNDINFO_REC);
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                        COMMAREA(ABNDINFO_REC)
+                        LENGTH(WS_CA_LEN) ;
+         EXEC CICS ABEND ABCODE('HROL') CANCEL NODUMP ;
+       END;
+       INQCUST_INQ_SUCCESS  = 'N';
+       INQCUST_INQ_FAIL_CD  = '2';
+       EXEC CICS RETURN ;
+     END;
+     OTHERWISE ;
+   END;
+
+   IF WS_STORM_DRAIN = 'N' THEN
+     EXEC CICS ABEND ABCODE(MY_ABEND_CODE) NODUMP ;
+
+ END INQCUST;

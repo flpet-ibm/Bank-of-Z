@@ -31,3 +31,6 @@ scripts/update-frontend-file-zos.sh
 **/datasets.yaml
 .gradle/
 .bobz
+
+# Bob Z Extension - Local data dictionary
+DD.json

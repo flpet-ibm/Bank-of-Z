@@ -1,0 +1,37 @@
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                         */
+ /*  CRECUST.inc - Create Customer commarea                           */
+ /*  Mirrors CRECUST.cpy                                              */
+ /* ----------------------------------------------------------------- */
+ DCL 1 CRECUST_COMMAREA,
+       2 COMM_EYECATCHER       CHAR(4),
+       2 COMM_KEY,
+         3 COMM_SORTCODE       CHAR(6),
+         3 COMM_NUMBER         CHAR(10),
+       2 COMM_NAME,
+         3 COMM_TITLE          CHAR(10),
+         3 COMM_FIRST_NAME     CHAR(50),
+         3 COMM_LAST_NAME      CHAR(50),
+       2 COMM_DOB,
+         3 COMM_DOB_DAY        CHAR(2),
+         3 COMM_DOB_MONTH      CHAR(2),
+         3 COMM_DOB_YEAR       CHAR(4),
+       2 COMM_PHONE            CHAR(20),
+       2 COMM_ADDR,
+         3 COMM_ADDR_LINE1     CHAR(50),
+         3 COMM_ADDR_LINE2     CHAR(50),
+         3 COMM_CITY           CHAR(50),
+         3 COMM_POSTCODE       CHAR(10),
+         3 COMM_COUNTRY        CHAR(50),
+       2 COMM_STATUS           CHAR(10),
+       2 COMM_CREATED_DATE,
+         3 COMM_CREATED_DAY    CHAR(2),
+         3 COMM_CREATED_MONTH  CHAR(2),
+         3 COMM_CREATED_YEAR   CHAR(4),
+       2 COMM_CREDIT_SCORE     FIXED DEC(3,0),
+       2 COMM_CS_REVIEW_DATE,
+         3 COMM_CS_REVIEW_DAY  CHAR(2),
+         3 COMM_CS_REVIEW_MONTH CHAR(2),
+         3 COMM_CS_REVIEW_YEAR CHAR(4),
+       2 COMM_SUCCESS          CHAR(1),
+       2 COMM_FAIL_CODE        CHAR(1);

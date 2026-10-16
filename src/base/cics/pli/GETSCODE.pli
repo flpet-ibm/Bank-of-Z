@@ -1,0 +1,27 @@
+ *PROCESS CICS;
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                         */
+ /*  GETSCODE - Return the sort code                                  */
+ /* ----------------------------------------------------------------- */
+ GETSCODE: PROCEDURE OPTIONS(MAIN REENTRANT);
+
+   DCL LITERAL_SORTCODE    CHAR(6) INIT('987654');  /* from SORTCODE  */
+
+   DCL COMM_PTR            POINTER;
+   DCL 1 DFHCOMMAREA BASED(COMM_PTR),
+         2 GETSORTCODEOPERATION,
+           3 SORTCODE_OUT   CHAR(6);
+
+   DCL WS_CICS_RESP        FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2       FIXED BIN(31) INIT(0);
+
+   EXEC CICS ADDRESS
+        COMMAREA(COMM_PTR)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   SORTCODE_OUT = LITERAL_SORTCODE;
+
+   EXEC CICS RETURN ;
+
+ END GETSCODE;

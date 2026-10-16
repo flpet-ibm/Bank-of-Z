@@ -1,0 +1,968 @@
+ *PROCESS CICS,SQL;
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                         */
+ /* ----------------------------------------------------------------- */
+ /*  XFRFUN - Transfer Funds Function                                 */
+ /*                                                                   */
+ /*  Transfers an amount between two accounts.  Validates the amount  */
+ /*  is positive and the accounts are different.  Updates the FROM    */
+ /*  account (debit) and the TO account (credit) in DB2. Writes two   */
+ /*  PROCTRAN records - one for the FROM account (negative amount)    */
+ /*  and one for the TO account (positive amount).                    */
+ /* ----------------------------------------------------------------- */
+ XFRFUN: PROCEDURE OPTIONS(MAIN REENTRANT);
+
+   /* ----------------------------------------------------------------*/
+   /*  SQLCA                                                          */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL INCLUDE SQLCA;
+
+   /* ----------------------------------------------------------------*/
+   /*  ACCOUNT table declaration                                      */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL DECLARE ACCOUNT TABLE
+     ( ACCOUNT_EYECATCHER          CHAR(4),
+       ACCOUNT_CUSTOMER_NUMBER     CHAR(10),
+       ACCOUNT_SORTCODE            CHAR(6)      NOT NULL,
+       ACCOUNT_NUMBER              CHAR(8)      NOT NULL,
+       ACCOUNT_TYPE                CHAR(8),
+       ACCOUNT_INTEREST_RATE       DECIMAL(4,2),
+       ACCOUNT_OPENED              DATE,
+       ACCOUNT_OVERDRAFT_LIMIT     INTEGER,
+       ACCOUNT_LAST_STATEMENT      DATE,
+       ACCOUNT_NEXT_STATEMENT      DATE,
+       ACCOUNT_AVAILABLE_BALANCE   DECIMAL(10,2),
+       ACCOUNT_ACTUAL_BALANCE      DECIMAL(10,2) );
+
+   /* ----------------------------------------------------------------*/
+   /*  PROCTRAN table declaration                                     */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL DECLARE PROCTRAN TABLE
+     ( PROCTRAN_EYECATCHER   CHAR(4),
+       PROCTRAN_SORTCODE     CHAR(6)       NOT NULL,
+       PROCTRAN_NUMBER       CHAR(8)       NOT NULL,
+       PROCTRAN_DATE         CHAR(10),
+       PROCTRAN_TIME         CHAR(6),
+       PROCTRAN_REF          CHAR(12),
+       PROCTRAN_TYPE         CHAR(3),
+       PROCTRAN_DESC         CHAR(40),
+       PROCTRAN_AMOUNT       DECIMAL(10,2) );
+
+   /* ----------------------------------------------------------------*/
+   /*  Sort code                                                      */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE SORTCODE;
+
+   /* ----------------------------------------------------------------*/
+   /*  DB2 host variables - ACCOUNT                                   */
+   /* ----------------------------------------------------------------*/
+   DCL HV_ACCOUNT_EYECATCHER      CHAR(4);
+   DCL HV_ACCOUNT_CUST_NO         CHAR(10);
+   DCL HV_ACCOUNT_SORTCODE        CHAR(6);
+   DCL HV_ACCOUNT_ACC_NO          CHAR(8);
+   DCL HV_ACCOUNT_ACC_TYPE        CHAR(8);
+   DCL HV_ACCOUNT_INT_RATE        FIXED DEC(6,2);
+   DCL HV_ACCOUNT_OPENED          CHAR(10);   /* DATE as CHAR(10)     */
+   DCL HV_ACCOUNT_OVERDRAFT_LIM   FIXED BIN(31);
+   DCL HV_ACCOUNT_LAST_STMT       CHAR(10);   /* DATE as CHAR(10)     */
+   DCL HV_ACCOUNT_NEXT_STMT       CHAR(10);   /* DATE as CHAR(10)     */
+   DCL HV_ACCOUNT_AVAIL_BAL       FIXED DEC(12,2);
+   DCL HV_ACCOUNT_ACTUAL_BAL      FIXED DEC(12,2);
+
+   /* ----------------------------------------------------------------*/
+   /*  DB2 host variables - PROCTRAN                                  */
+   /* ----------------------------------------------------------------*/
+   DCL HV_PROCTRAN_EYECATCHER     CHAR(4);
+   DCL HV_PROCTRAN_SORT_CODE      CHAR(6);
+   DCL HV_PROCTRAN_ACC_NUMBER     CHAR(8);
+   DCL HV_PROCTRAN_DATE           CHAR(10);
+   DCL HV_PROCTRAN_TIME           CHAR(6);
+   DCL HV_PROCTRAN_REF            CHAR(12);
+   DCL HV_PROCTRAN_TYPE           CHAR(3);
+   DCL HV_PROCTRAN_DESC           CHAR(40);
+   DCL HV_PROCTRAN_AMOUNT         FIXED DEC(12,2);
+
+   /* ----------------------------------------------------------------*/
+   /*  CICS response codes                                            */
+   /* ----------------------------------------------------------------*/
+   DCL WS_CICS_RESP               FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2              FIXED BIN(31) INIT(0);
+
+   /* ----------------------------------------------------------------*/
+   /*  Work area for date formatted as DD.MM.YYYY                     */
+   /* ----------------------------------------------------------------*/
+   DCL 1 WS_ORIG_DATE_GRP_X,
+         2 WS_ORIG_DATE_DD_X        CHAR(2),
+         2 WS_ORIG_DATE_SEP1_X      CHAR(1) INIT('.'),
+         2 WS_ORIG_DATE_MM_X        CHAR(2),
+         2 WS_ORIG_DATE_SEP2_X      CHAR(1) INIT('.'),
+         2 WS_ORIG_DATE_YYYY_X      CHAR(4);
+
+   /* ----------------------------------------------------------------*/
+   /*  Desired account key                                            */
+   /* ----------------------------------------------------------------*/
+   DCL DESIRED_SORT_CODE           CHAR(6);
+   DCL DESIRED_ACC_NO              CHAR(8);
+
+   /* ----------------------------------------------------------------*/
+   /*  PROCTRAN description XFR overlay                               */
+   /* ----------------------------------------------------------------*/
+   DCL PROC_TRAN_DESC_PTR          POINTER;
+   DCL 1 PROC_TRAN_DESC_XFR BASED(PROC_TRAN_DESC_PTR),
+         2 PROC_TRAN_DESC_XFR_HEADER    CHAR(26),
+         2 PROC_TRAN_DESC_XFR_SORTCODE  CHAR(6),
+         2 PROC_TRAN_DESC_XFR_ACCOUNT   CHAR(8);
+
+   /* ----------------------------------------------------------------*/
+   /*  Miscellaneous work variables                                   */
+   /* ----------------------------------------------------------------*/
+   DCL SQLCODE_DISPLAY             FIXED BIN(31);
+   DCL WS_SQLCODE_DISP             FIXED DEC(9,0) INIT(0);
+   DCL WS_EIBTASKN12               FIXED DEC(12,0) INIT(0);
+   DCL WS_U_TIME                   FIXED DEC(15,0) INIT(0);
+   DCL WS_ORIG_DATE                CHAR(10);
+   DCL WS_TIME_NOW                 CHAR(6);
+   DCL WS_ABEND_PGM                CHAR(8) INIT('ABNDPROC');
+   DCL MY_ABEND_CODE               CHAR(4);
+   DCL WS_CA_LEN                   FIXED BIN(15);
+   DCL WS_STORM_DRAIN              CHAR(1) INIT('N');
+   DCL STORM_DRAIN_CONDITION       CHAR(20);
+   DCL DB2_DEADLOCK_RETRY          FIXED BIN(31) INIT(0);
+
+   /* Saved date/time from first PROCTRAN INSERT */
+   DCL SAVED_PT_DATE               CHAR(10);
+   DCL SAVED_PT_TIME               CHAR(6);
+
+   /* ----------------------------------------------------------------*/
+   /*  Abend info record                                              */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE ABNDINFO;
+
+   /* ----------------------------------------------------------------*/
+   /*  COMMAREA                                                       */
+   /* ----------------------------------------------------------------*/
+   DCL COMMAREA_PTR                POINTER;
+   %INCLUDE XFRFUN;
+   DCL 1 DFHCOMMAREA BASED(COMMAREA_PTR) LIKE XFRFUN_COMMAREA;
+
+   /* ================================================================*/
+   /*  MAIN PROCEDURE LOGIC                                           */
+   /* ================================================================*/
+
+   /* Set up abend handler */
+   EXEC CICS HANDLE ABEND LABEL(ABEND_HANDLING) ;
+
+   /* Get the COMMAREA address */
+   EXEC CICS ADDRESS
+        COMMAREA(COMMAREA_PTR)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   HV_ACCOUNT_EYECATCHER = '0';
+   HV_ACCOUNT_SORTCODE   = '0';
+   HV_ACCOUNT_ACC_NO     = '0';
+   DB2_DEADLOCK_RETRY    = 0;
+
+   COMM_FSCODE = SORTCODE;
+   COMM_TSCODE = SORTCODE;
+   DESIRED_SORT_CODE = SORTCODE;
+
+   IF COMM_AMT <= 0 THEN DO;
+     COMM_SUCCESS   = 'N';
+     COMM_FAIL_CODE = '4';
+     CALL GET_ME_OUT_OF_HERE;
+   END;
+
+   CALL UPDATE_ACCOUNT_DB2;
+
+   CALL GET_ME_OUT_OF_HERE;
+
+ /* ------------------------------------------------------------------*/
+ /*  UPDATE_ACCOUNT_DB2 - Orchestrate FROM and TO account updates     */
+ /* ------------------------------------------------------------------*/
+ UPDATE_ACCOUNT_DB2: PROCEDURE;
+
+   COMM_SUCCESS = 'N';
+
+   /* Check not transferring to the same account */
+   IF COMM_FACCNO = COMM_TACCNO & COMM_FSCODE = COMM_TSCODE THEN DO;
+     ABNDINFO_REC = '';
+     ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE  = WS_ORIG_DATE;
+     ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE      = 'SAME';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE   = '0';
+     ABND_FREEFORM  = 'UAD010 - Cannot transfer to the same account ' ||
+                      ' EIBRESP=' || SUBSTR(CHAR(EIBRESP),1,10) ||
+                      ' RESP2='   || SUBSTR(CHAR(EIBRESP2),1,10);
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     EXEC CICS ABEND ABCODE('SAME') NODUMP CANCEL ;
+   END;
+
+   /* Lock accounts in account-number order to avoid deadlock */
+   IF COMM_FACCNO < COMM_TACCNO THEN DO;
+     /* Update FROM first, then TO */
+     DESIRED_ACC_NO    = COMM_FACCNO;
+     DESIRED_SORT_CODE = COMM_FSCODE;
+     CALL UPDATE_ACCOUNT_DB2_FROM;
+
+     IF COMM_SUCCESS = 'Y' THEN DO;
+       DESIRED_ACC_NO    = COMM_TACCNO;
+       DESIRED_SORT_CODE = COMM_TSCODE;
+       CALL UPDATE_ACCOUNT_DB2_TO;
+
+       IF COMM_SUCCESS = 'N' THEN DO;
+         /* TO update failed */
+         IF COMM_FAIL_CODE = '2' THEN DO;
+           EXEC CICS SYNCPOINT ROLLBACK
+                RESP(WS_CICS_RESP)
+                RESP2(WS_CICS_RESP2) ;
+           IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+             ABNDINFO_REC = '';
+             ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+             ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+             EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+             ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+             ABND_TRANID     = EIBTRNID;
+             CALL POPULATE_TIME_DATE;
+             ABND_DATE  = WS_ORIG_DATE;
+             ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                          SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                          SUBSTR(WS_TIME_NOW,5,2);
+             ABND_UTIME_KEY = WS_U_TIME;
+             ABND_CODE      = 'HROL';
+             EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+             ABND_SQLCODE   = '0';
+           ABND_FREEFORM  = 'UAD010(2) - Error on SYNCPOINT ROLLBACK' ||
+                              ' after UPDATING TO account' ||
+                            ' EIBRESP=' || SUBSTR(CHAR(EIBRESP),1,10) ||
+                             ' RESP2='   || SUBSTR(CHAR(EIBRESP2),1,10);
+             WS_CA_LEN = SIZE(ABNDINFO_REC);
+             EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                            COMMAREA(ABNDINFO_REC)
+                            LENGTH(WS_CA_LEN) ;
+             EXEC CICS ABEND ABCODE('HROL') NODUMP CANCEL ;
+           END;
+           RETURN;
+         END;
+         ELSE DO;
+           EXEC CICS ABEND ABCODE('TO  ') NODUMP ;
+         END;
+       END;
+     END;
+     ELSE DO;
+       /* FROM update failed */
+       IF COMM_FAIL_CODE = '1' THEN DO;
+         EXEC CICS SYNCPOINT ROLLBACK
+              RESP(WS_CICS_RESP)
+              RESP2(WS_CICS_RESP2) ;
+         IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+           EXEC CICS ABEND ABCODE('HROL') NODUMP ;
+         END;
+         RETURN;
+       END;
+       ELSE DO;
+         ABNDINFO_REC = '';
+         ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+         ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+         EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+         ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+         ABND_TRANID     = EIBTRNID;
+         CALL POPULATE_TIME_DATE;
+         ABND_DATE  = WS_ORIG_DATE;
+         ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                      SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                      SUBSTR(WS_TIME_NOW,5,2);
+         ABND_UTIME_KEY = WS_U_TIME;
+         ABND_CODE      = 'FROM';
+         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+         ABND_SQLCODE   = '0';
+         ABND_FREEFORM  = 'UAD010(3) - Error updating FROM account ' ||
+                          ' EIBRESP=' || SUBSTR(CHAR(EIBRESP),1,10) ||
+                          ' RESP2='   || SUBSTR(CHAR(EIBRESP2),1,10);
+         WS_CA_LEN = SIZE(ABNDINFO_REC);
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                        COMMAREA(ABNDINFO_REC)
+                        LENGTH(WS_CA_LEN) ;
+         EXEC CICS ABEND ABCODE('FROM') NODUMP CANCEL ;
+       END;
+     END;
+   END;
+   ELSE DO;
+     /* Update TO first, then FROM */
+     DESIRED_ACC_NO    = COMM_TACCNO;
+     DESIRED_SORT_CODE = COMM_TSCODE;
+     CALL UPDATE_ACCOUNT_DB2_TO;
+
+     IF COMM_SUCCESS = 'Y' THEN DO;
+       DESIRED_ACC_NO    = COMM_FACCNO;
+       DESIRED_SORT_CODE = COMM_FSCODE;
+       CALL UPDATE_ACCOUNT_DB2_FROM;
+
+       IF COMM_SUCCESS = 'N' THEN DO;
+         IF COMM_FAIL_CODE ^= '1' THEN DO;
+           ABNDINFO_REC = '';
+           ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+           ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+           EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+           ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+           ABND_TRANID     = EIBTRNID;
+           CALL POPULATE_TIME_DATE;
+           ABND_DATE  = WS_ORIG_DATE;
+           ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                        SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                        SUBSTR(WS_TIME_NOW,5,2);
+           ABND_UTIME_KEY = WS_U_TIME;
+           ABND_CODE      = 'FROM';
+           EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+           ABND_SQLCODE   = '0';
+          ABND_FREEFORM  = 'UAD010(4) - Error updating FROM account ' ||
+                            ' EIBRESP=' || SUBSTR(CHAR(EIBRESP),1,10) ||
+                            ' RESP2='   || SUBSTR(CHAR(EIBRESP2),1,10);
+           WS_CA_LEN = SIZE(ABNDINFO_REC);
+           EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                          COMMAREA(ABNDINFO_REC)
+                          LENGTH(WS_CA_LEN) ;
+           EXEC CICS ABEND ABCODE('FROM') NODUMP CANCEL ;
+         END;
+         ELSE DO;
+           /* FAIL_CODE = 1: rollback */
+           EXEC CICS SYNCPOINT ROLLBACK
+                RESP(WS_CICS_RESP)
+                RESP2(WS_CICS_RESP2) ;
+           IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+             ABNDINFO_REC = '';
+             ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+             ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+             EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+             ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+             ABND_TRANID     = EIBTRNID;
+             CALL POPULATE_TIME_DATE;
+             ABND_DATE  = WS_ORIG_DATE;
+             ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                          SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                          SUBSTR(WS_TIME_NOW,5,2);
+             ABND_UTIME_KEY = WS_U_TIME;
+             ABND_CODE      = 'HROL';
+             EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+             ABND_SQLCODE   = '0';
+           ABND_FREEFORM  = 'UAD010(5) - Error on SYNCPOINT ROLLBACK' ||
+                              ' after UPDATING the FROM account' ||
+                            ' EIBRESP=' || SUBSTR(CHAR(EIBRESP),1,10) ||
+                             ' RESP2='   || SUBSTR(CHAR(EIBRESP2),1,10);
+             WS_CA_LEN = SIZE(ABNDINFO_REC);
+             EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                            COMMAREA(ABNDINFO_REC)
+                            LENGTH(WS_CA_LEN) ;
+             EXEC CICS ABEND ABCODE('HROL') NODUMP CANCEL ;
+           END;
+           RETURN;
+         END;
+       END;
+     END;
+     ELSE DO;
+       /* TO update failed */
+       IF COMM_FAIL_CODE ^= '2' THEN DO;
+         ABNDINFO_REC = '';
+         ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+         ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+         EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+         ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+         ABND_TRANID     = EIBTRNID;
+         CALL POPULATE_TIME_DATE;
+         ABND_DATE  = WS_ORIG_DATE;
+         ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                      SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                      SUBSTR(WS_TIME_NOW,5,2);
+         ABND_UTIME_KEY = WS_U_TIME;
+         ABND_CODE      = 'TO  ';
+         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+         ABND_SQLCODE   = '0';
+         ABND_FREEFORM  = 'UAD010(6) - Error updating TO account ' ||
+                          ' EIBRESP=' || SUBSTR(CHAR(EIBRESP),1,10) ||
+                          ' RESP2='   || SUBSTR(CHAR(EIBRESP2),1,10);
+         WS_CA_LEN = SIZE(ABNDINFO_REC);
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                        COMMAREA(ABNDINFO_REC)
+                        LENGTH(WS_CA_LEN) ;
+         EXEC CICS ABEND ABCODE('TO  ') CANCEL NODUMP ;
+       END;
+       ELSE DO;
+         /* FAIL_CODE = 2: rollback */
+         EXEC CICS SYNCPOINT ROLLBACK
+              RESP(WS_CICS_RESP)
+              RESP2(WS_CICS_RESP2) ;
+         IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+           ABNDINFO_REC = '';
+           ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+           ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+           EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+           ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+           ABND_TRANID     = EIBTRNID;
+           CALL POPULATE_TIME_DATE;
+           ABND_DATE  = WS_ORIG_DATE;
+           ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                        SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                        SUBSTR(WS_TIME_NOW,5,2);
+           ABND_UTIME_KEY = WS_U_TIME;
+           ABND_CODE      = 'HROL';
+           EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+           ABND_SQLCODE   = '0';
+           ABND_FREEFORM  = 'UAD010(7) - Error on SYNCPOINT ROLLBACK' ||
+                            ' after UPDATING the TO account' ||
+                            ' EIBRESP=' || SUBSTR(CHAR(EIBRESP),1,10) ||
+                            ' RESP2='   || SUBSTR(CHAR(EIBRESP2),1,10);
+           WS_CA_LEN = SIZE(ABNDINFO_REC);
+           EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                          COMMAREA(ABNDINFO_REC)
+                          LENGTH(WS_CA_LEN) ;
+           EXEC CICS ABEND ABCODE('HROL') NODUMP CANCEL ;
+         END;
+         RETURN;
+       END;
+     END;
+   END;
+
+   /* Both updates succeeded - write PROCTRAN records */
+   CALL WRITE_TO_PROCTRAN;
+   COMM_SUCCESS = 'Y';
+
+ END UPDATE_ACCOUNT_DB2;
+
+ /* ------------------------------------------------------------------*/
+ /*  UPDATE_ACCOUNT_DB2_FROM - SELECT then UPDATE the FROM account    */
+ /* ------------------------------------------------------------------*/
+ UPDATE_ACCOUNT_DB2_FROM: PROCEDURE;
+
+   DESIRED_ACC_NO      = COMM_FACCNO;
+   DESIRED_SORT_CODE   = COMM_FSCODE;
+   HV_ACCOUNT_SORTCODE = DESIRED_SORT_CODE;
+   HV_ACCOUNT_ACC_NO   = DESIRED_ACC_NO;
+
+   EXEC SQL
+     SELECT ACCOUNT_EYECATCHER,
+            ACCOUNT_CUSTOMER_NUMBER,
+            ACCOUNT_SORTCODE,
+            ACCOUNT_NUMBER,
+            ACCOUNT_TYPE,
+            ACCOUNT_INTEREST_RATE,
+            ACCOUNT_OPENED,
+            ACCOUNT_OVERDRAFT_LIMIT,
+            ACCOUNT_LAST_STATEMENT,
+            ACCOUNT_NEXT_STATEMENT,
+            ACCOUNT_AVAILABLE_BALANCE,
+            ACCOUNT_ACTUAL_BALANCE
+     INTO  :HV_ACCOUNT_EYECATCHER,
+           :HV_ACCOUNT_CUST_NO,
+           :HV_ACCOUNT_SORTCODE,
+           :HV_ACCOUNT_ACC_NO,
+           :HV_ACCOUNT_ACC_TYPE,
+           :HV_ACCOUNT_INT_RATE,
+           :HV_ACCOUNT_OPENED,
+           :HV_ACCOUNT_OVERDRAFT_LIM,
+           :HV_ACCOUNT_LAST_STMT,
+           :HV_ACCOUNT_NEXT_STMT,
+           :HV_ACCOUNT_AVAIL_BAL,
+           :HV_ACCOUNT_ACTUAL_BAL
+     FROM ACCOUNT
+     WHERE ACCOUNT_SORTCODE = :HV_ACCOUNT_SORTCODE
+       AND ACCOUNT_NUMBER   = :HV_ACCOUNT_ACC_NO ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     COMM_SUCCESS = 'N';
+     IF SQLCODE = 100 THEN
+       COMM_FAIL_CODE = '1';
+     ELSE
+       COMM_FAIL_CODE = '3';
+     CALL CHECK_FOR_STORM_DRAIN_DB2;
+     RETURN;
+   END;
+
+   HV_ACCOUNT_AVAIL_BAL  = HV_ACCOUNT_AVAIL_BAL  - COMM_AMT;
+   HV_ACCOUNT_ACTUAL_BAL = HV_ACCOUNT_ACTUAL_BAL - COMM_AMT;
+
+   EXEC SQL
+     UPDATE ACCOUNT
+     SET ACCOUNT_EYECATCHER          = :HV_ACCOUNT_EYECATCHER,
+         ACCOUNT_CUSTOMER_NUMBER     = :HV_ACCOUNT_CUST_NO,
+         ACCOUNT_SORTCODE            = :HV_ACCOUNT_SORTCODE,
+         ACCOUNT_NUMBER              = :HV_ACCOUNT_ACC_NO,
+         ACCOUNT_TYPE                = :HV_ACCOUNT_ACC_TYPE,
+         ACCOUNT_INTEREST_RATE       = :HV_ACCOUNT_INT_RATE,
+         ACCOUNT_OPENED              = :HV_ACCOUNT_OPENED,
+         ACCOUNT_OVERDRAFT_LIMIT     = :HV_ACCOUNT_OVERDRAFT_LIM,
+         ACCOUNT_LAST_STATEMENT      = :HV_ACCOUNT_LAST_STMT,
+         ACCOUNT_NEXT_STATEMENT      = :HV_ACCOUNT_NEXT_STMT,
+         ACCOUNT_AVAILABLE_BALANCE   = :HV_ACCOUNT_AVAIL_BAL,
+         ACCOUNT_ACTUAL_BALANCE      = :HV_ACCOUNT_ACTUAL_BAL
+     WHERE ACCOUNT_SORTCODE = :HV_ACCOUNT_SORTCODE
+       AND ACCOUNT_NUMBER   = :HV_ACCOUNT_ACC_NO ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     COMM_SUCCESS   = 'N';
+     COMM_FAIL_CODE = '3';
+     CALL CHECK_FOR_STORM_DRAIN_DB2;
+     RETURN;
+   END;
+
+   COMM_FAVBAL  = HV_ACCOUNT_AVAIL_BAL;
+   COMM_FACTBAL = HV_ACCOUNT_ACTUAL_BAL;
+   COMM_SUCCESS = 'Y';
+
+ END UPDATE_ACCOUNT_DB2_FROM;
+
+ /* ------------------------------------------------------------------*/
+ /*  UPDATE_ACCOUNT_DB2_TO - SELECT then UPDATE the TO account        */
+ /* ------------------------------------------------------------------*/
+ UPDATE_ACCOUNT_DB2_TO: PROCEDURE;
+
+   COMM_SUCCESS = 'N';
+
+   HV_ACCOUNT_EYECATCHER = ' ';
+   HV_ACCOUNT_SORTCODE   = ' ';
+   HV_ACCOUNT_ACC_NO     = ' ';
+
+   DESIRED_ACC_NO      = COMM_TACCNO;
+   DESIRED_SORT_CODE   = COMM_TSCODE;
+   HV_ACCOUNT_SORTCODE = DESIRED_SORT_CODE;
+   HV_ACCOUNT_ACC_NO   = DESIRED_ACC_NO;
+
+   EXEC SQL
+     SELECT ACCOUNT_EYECATCHER,
+            ACCOUNT_CUSTOMER_NUMBER,
+            ACCOUNT_SORTCODE,
+            ACCOUNT_NUMBER,
+            ACCOUNT_TYPE,
+            ACCOUNT_INTEREST_RATE,
+            ACCOUNT_OPENED,
+            ACCOUNT_OVERDRAFT_LIMIT,
+            ACCOUNT_LAST_STATEMENT,
+            ACCOUNT_NEXT_STATEMENT,
+            ACCOUNT_AVAILABLE_BALANCE,
+            ACCOUNT_ACTUAL_BALANCE
+     INTO  :HV_ACCOUNT_EYECATCHER,
+           :HV_ACCOUNT_CUST_NO,
+           :HV_ACCOUNT_SORTCODE,
+           :HV_ACCOUNT_ACC_NO,
+           :HV_ACCOUNT_ACC_TYPE,
+           :HV_ACCOUNT_INT_RATE,
+           :HV_ACCOUNT_OPENED,
+           :HV_ACCOUNT_OVERDRAFT_LIM,
+           :HV_ACCOUNT_LAST_STMT,
+           :HV_ACCOUNT_NEXT_STMT,
+           :HV_ACCOUNT_AVAIL_BAL,
+           :HV_ACCOUNT_ACTUAL_BAL
+     FROM ACCOUNT
+     WHERE ACCOUNT_SORTCODE = :HV_ACCOUNT_SORTCODE
+       AND ACCOUNT_NUMBER   = :HV_ACCOUNT_ACC_NO ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     COMM_SUCCESS = 'N';
+     CALL CHECK_FOR_STORM_DRAIN_DB2;
+     IF SQLCODE = 100 THEN DO;
+       COMM_FAIL_CODE = '2';
+       /* Rollback to avoid data inconsistency */
+       EXEC CICS SYNCPOINT ROLLBACK
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         ABNDINFO_REC = '';
+         ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+         ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+         EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+         ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+         ABND_TRANID     = EIBTRNID;
+         CALL POPULATE_TIME_DATE;
+         ABND_DATE  = WS_ORIG_DATE;
+         ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                      SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                      SUBSTR(WS_TIME_NOW,5,2);
+         ABND_UTIME_KEY = WS_U_TIME;
+         ABND_CODE      = 'HROL';
+         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+         ABND_SQLCODE   = '0';
+         ABND_FREEFORM  = 'UAD010-TO - Error on SYNCPOINT ROLLBACK ' ||
+                          'after failing to read TO account' ||
+                          ' EIBRESP=' || SUBSTR(CHAR(EIBRESP),1,10) ||
+                          ' RESP2='   || SUBSTR(CHAR(EIBRESP2),1,10);
+         WS_CA_LEN = SIZE(ABNDINFO_REC);
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                        COMMAREA(ABNDINFO_REC)
+                        LENGTH(WS_CA_LEN) ;
+         EXEC CICS ABEND ABCODE('HROL') NODUMP CANCEL ;
+       END;
+       RETURN;
+     END;
+     ELSE DO;
+       COMM_FAIL_CODE = '3';
+       /* Abend - data inconsistency */
+       ABNDINFO_REC = '';
+       ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+       ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+       EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+       ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+       ABND_TRANID     = EIBTRNID;
+       CALL POPULATE_TIME_DATE;
+       ABND_DATE  = WS_ORIG_DATE;
+       ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                    SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                    SUBSTR(WS_TIME_NOW,5,2);
+       ABND_UTIME_KEY = WS_U_TIME;
+       ABND_CODE      = 'RUF2';
+       EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+       ABND_SQLCODE   = '0';
+       ABND_FREEFORM  = 'UAD010-TO(3) - Unable to read TO account ' ||
+                        ' EIBRESP=' || SUBSTR(CHAR(EIBRESP),1,10) ||
+                        ' RESP2='   || SUBSTR(CHAR(EIBRESP2),1,10);
+       WS_CA_LEN = SIZE(ABNDINFO_REC);
+       EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                      COMMAREA(ABNDINFO_REC)
+                      LENGTH(WS_CA_LEN) ;
+       EXEC CICS ABEND ABCODE('RUF2') ;
+     END;
+   END;
+
+   /* Credit the TO account */
+   HV_ACCOUNT_AVAIL_BAL  = HV_ACCOUNT_AVAIL_BAL  + COMM_AMT;
+   HV_ACCOUNT_ACTUAL_BAL = HV_ACCOUNT_ACTUAL_BAL + COMM_AMT;
+
+   EXEC SQL
+     UPDATE ACCOUNT
+     SET ACCOUNT_EYECATCHER          = :HV_ACCOUNT_EYECATCHER,
+         ACCOUNT_CUSTOMER_NUMBER     = :HV_ACCOUNT_CUST_NO,
+         ACCOUNT_SORTCODE            = :HV_ACCOUNT_SORTCODE,
+         ACCOUNT_NUMBER              = :HV_ACCOUNT_ACC_NO,
+         ACCOUNT_TYPE                = :HV_ACCOUNT_ACC_TYPE,
+         ACCOUNT_INTEREST_RATE       = :HV_ACCOUNT_INT_RATE,
+         ACCOUNT_OPENED              = :HV_ACCOUNT_OPENED,
+         ACCOUNT_OVERDRAFT_LIMIT     = :HV_ACCOUNT_OVERDRAFT_LIM,
+         ACCOUNT_LAST_STATEMENT      = :HV_ACCOUNT_LAST_STMT,
+         ACCOUNT_NEXT_STATEMENT      = :HV_ACCOUNT_NEXT_STMT,
+         ACCOUNT_AVAILABLE_BALANCE   = :HV_ACCOUNT_AVAIL_BAL,
+         ACCOUNT_ACTUAL_BALANCE      = :HV_ACCOUNT_ACTUAL_BAL
+     WHERE ACCOUNT_SORTCODE = :HV_ACCOUNT_SORTCODE
+       AND ACCOUNT_NUMBER   = :HV_ACCOUNT_ACC_NO ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+     CALL CHECK_FOR_STORM_DRAIN_DB2;
+     /* Abend to avoid data inconsistency */
+     ABNDINFO_REC = '';
+     ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE  = WS_ORIG_DATE;
+     ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE      = 'RUF3';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE   = '0';
+     ABND_FREEFORM  = 'UAD010-TO(5) - Unable to UPDATE TO account ' ||
+                      ' EIBRESP=' || SUBSTR(CHAR(EIBRESP),1,10) ||
+                      ' RESP2='   || SUBSTR(CHAR(EIBRESP2),1,10);
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     EXEC CICS ABEND ABCODE('RUF3') ;
+   END;
+
+   COMM_TAVBAL  = HV_ACCOUNT_AVAIL_BAL;
+   COMM_TACTBAL = HV_ACCOUNT_ACTUAL_BAL;
+   COMM_SUCCESS = 'Y';
+
+ END UPDATE_ACCOUNT_DB2_TO;
+
+ /* ------------------------------------------------------------------*/
+ /*  WRITE_TO_PROCTRAN - Wrapper                                      */
+ /* ------------------------------------------------------------------*/
+ WRITE_TO_PROCTRAN: PROCEDURE;
+
+   CALL WRITE_TO_PROCTRAN_DB2;
+
+ END WRITE_TO_PROCTRAN;
+
+ /* ------------------------------------------------------------------*/
+ /*  WRITE_TO_PROCTRAN_DB2 - INSERT two rows (FROM -ve, TO +ve)       */
+ /* ------------------------------------------------------------------*/
+ WRITE_TO_PROCTRAN_DB2: PROCEDURE;
+
+   /* ---- FROM account record (negative amount = debit) ---- */
+   HV_PROCTRAN_EYECATCHER = 'PRTR';
+   HV_PROCTRAN_SORT_CODE  = COMM_FSCODE;
+   HV_PROCTRAN_ACC_NUMBER = COMM_FACCNO;
+   WS_EIBTASKN12          = EIBTASKN;
+   HV_PROCTRAN_REF        = SUBSTR(CHAR(WS_EIBTASKN12),1,12);
+
+   EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+
+   EXEC CICS FORMATTIME
+        ABSTIME(WS_U_TIME)
+        DDMMYYYY(WS_ORIG_DATE)
+        TIME(HV_PROCTRAN_TIME)
+        DATESEP('.') ;
+
+   WS_ORIG_DATE_DD_X   = SUBSTR(WS_ORIG_DATE,1,2);
+   WS_ORIG_DATE_MM_X   = SUBSTR(WS_ORIG_DATE,4,2);
+   WS_ORIG_DATE_YYYY_X = SUBSTR(WS_ORIG_DATE,7,4);
+   HV_PROCTRAN_DATE = WS_ORIG_DATE_DD_X || '.' ||
+                      WS_ORIG_DATE_MM_X || '.' ||
+                      WS_ORIG_DATE_YYYY_X;
+
+   HV_PROCTRAN_TYPE = 'TFR';
+
+   /* Negative amount for FROM (debit) */
+   HV_PROCTRAN_AMOUNT = COMM_AMT * -1;
+
+   /* Build description: XFR header + TO sortcode + TO account */
+   HV_PROCTRAN_DESC = '                          ';
+   PROC_TRAN_DESC_PTR = ADDR(HV_PROCTRAN_DESC);
+   PROC_TRAN_DESC_XFR_HEADER   = 'Transfer to             ';
+   PROC_TRAN_DESC_XFR_SORTCODE = COMM_TSCODE;
+   PROC_TRAN_DESC_XFR_ACCOUNT  = COMM_TACCNO;
+
+   /* Save date/time for the second record */
+   SAVED_PT_DATE = HV_PROCTRAN_DATE;
+   SAVED_PT_TIME = HV_PROCTRAN_TIME;
+
+   EXEC SQL
+     INSERT INTO PROCTRAN
+       ( PROCTRAN_EYECATCHER,
+         PROCTRAN_SORTCODE,
+         PROCTRAN_NUMBER,
+         PROCTRAN_DATE,
+         PROCTRAN_TIME,
+         PROCTRAN_REF,
+         PROCTRAN_TYPE,
+         PROCTRAN_DESC,
+         PROCTRAN_AMOUNT )
+     VALUES
+       ( :HV_PROCTRAN_EYECATCHER,
+         :HV_PROCTRAN_SORT_CODE,
+         :HV_PROCTRAN_ACC_NUMBER,
+         :HV_PROCTRAN_DATE,
+         :HV_PROCTRAN_TIME,
+         :HV_PROCTRAN_REF,
+         :HV_PROCTRAN_TYPE,
+         :HV_PROCTRAN_DESC,
+         :HV_PROCTRAN_AMOUNT ) ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     WS_SQLCODE_DISP = SQLCODE;
+     ABNDINFO_REC = '';
+     ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE  = WS_ORIG_DATE;
+     ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE      = 'WPCD';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE   = SUBSTR(CHAR(WS_SQLCODE_DISP), 1, 10);
+     ABND_FREEFORM  = 'WTPD010 - Unable to WRITE to PROCTRAN DB2 ' ||
+                      'datastore. Data inconsistency.' ||
+                      ' EIBRESP=' || SUBSTR(CHAR(EIBRESP),1,10) ||
+                      ' RESP2='   || SUBSTR(CHAR(EIBRESP2),1,10);
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     CALL CHECK_FOR_STORM_DRAIN_DB2;
+     EXEC CICS ABEND ABCODE('WPCD') ;
+   END;
+
+   /* ---- TO account record (positive amount = credit) ---- */
+   HV_PROCTRAN_EYECATCHER = 'PRTR';
+   HV_PROCTRAN_SORT_CODE  = COMM_TSCODE;
+   HV_PROCTRAN_ACC_NUMBER = COMM_TACCNO;
+   HV_PROCTRAN_REF        = SUBSTR(CHAR(WS_EIBTASKN12),1,12);
+   HV_PROCTRAN_DATE       = SAVED_PT_DATE;
+   HV_PROCTRAN_TIME       = SAVED_PT_TIME;
+
+   HV_PROCTRAN_TYPE   = 'TFR';
+   HV_PROCTRAN_AMOUNT = COMM_AMT;   /* positive for TO (credit) */
+
+  /* Build description for TO record: header, FROM sort, acct */
+   HV_PROCTRAN_DESC = '                          ';
+   PROC_TRAN_DESC_PTR = ADDR(HV_PROCTRAN_DESC);
+   PROC_TRAN_DESC_XFR_HEADER   = 'Transfer from           ';
+   PROC_TRAN_DESC_XFR_SORTCODE = COMM_FSCODE;
+   PROC_TRAN_DESC_XFR_ACCOUNT  = COMM_FACCNO;
+
+   EXEC SQL
+     INSERT INTO PROCTRAN
+       ( PROCTRAN_EYECATCHER,
+         PROCTRAN_SORTCODE,
+         PROCTRAN_NUMBER,
+         PROCTRAN_DATE,
+         PROCTRAN_TIME,
+         PROCTRAN_REF,
+         PROCTRAN_TYPE,
+         PROCTRAN_DESC,
+         PROCTRAN_AMOUNT )
+     VALUES
+       ( :HV_PROCTRAN_EYECATCHER,
+         :HV_PROCTRAN_SORT_CODE,
+         :HV_PROCTRAN_ACC_NUMBER,
+         :HV_PROCTRAN_DATE,
+         :HV_PROCTRAN_TIME,
+         :HV_PROCTRAN_REF,
+         :HV_PROCTRAN_TYPE,
+         :HV_PROCTRAN_DESC,
+         :HV_PROCTRAN_AMOUNT ) ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     WS_SQLCODE_DISP = SQLCODE;
+     ABNDINFO_REC = '';
+     ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE  = WS_ORIG_DATE;
+     ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE      = 'WPCT';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE   = SUBSTR(CHAR(WS_SQLCODE_DISP), 1, 10);
+  ABND_FREEFORM  = 'WTPD010 - Unable to WRITE TO account to PROCTRAN' ||
+                      ' DB2 datastore. Data inconsistency.' ||
+                      ' EIBRESP=' || SUBSTR(CHAR(EIBRESP),1,10) ||
+                      ' RESP2='   || SUBSTR(CHAR(EIBRESP2),1,10);
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     CALL CHECK_FOR_STORM_DRAIN_DB2;
+     EXEC CICS ABEND ABCODE('WPCT') ;
+   END;
+
+ END WRITE_TO_PROCTRAN_DB2;
+
+ /* ------------------------------------------------------------------*/
+ /*  GET_ME_OUT_OF_HERE - Return to CICS                              */
+ /* ------------------------------------------------------------------*/
+ GET_ME_OUT_OF_HERE: PROCEDURE;
+
+   EXEC CICS RETURN ;
+
+ END GET_ME_OUT_OF_HERE;
+
+ /* ------------------------------------------------------------------*/
+ /*  CHECK_FOR_STORM_DRAIN_DB2 - Classify SQLCODE                     */
+ /* ------------------------------------------------------------------*/
+ CHECK_FOR_STORM_DRAIN_DB2: PROCEDURE;
+
+   SELECT (SQLCODE);
+     WHEN (923)  STORM_DRAIN_CONDITION = 'DB2 Connection lost ';
+     OTHERWISE   STORM_DRAIN_CONDITION = 'Not Storm Drain     ';
+   END;
+
+   IF STORM_DRAIN_CONDITION ^= 'Not Storm Drain     ' THEN
+     PUT SKIP LIST('XFRFUN: Storm Drain condition (' ||
+                   STORM_DRAIN_CONDITION || ') SQLCODE=' ||
+                   CHAR(SQLCODE));
+
+ END CHECK_FOR_STORM_DRAIN_DB2;
+
+ /* ------------------------------------------------------------------*/
+ /*  POPULATE_TIME_DATE - Get current date and time via CICS          */
+ /* ------------------------------------------------------------------*/
+ POPULATE_TIME_DATE: PROCEDURE;
+
+   EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+
+   EXEC CICS FORMATTIME
+        ABSTIME(WS_U_TIME)
+        DDMMYYYY(WS_ORIG_DATE)
+        TIME(WS_TIME_NOW)
+        DATESEP ;
+
+ END POPULATE_TIME_DATE;
+
+ /* ------------------------------------------------------------------*/
+ /*  ABEND_HANDLING - Handle CICS abends                              */
+ /* ------------------------------------------------------------------*/
+ ABEND_HANDLING:
+   EXEC CICS ASSIGN ABCODE(MY_ABEND_CODE) ;
+
+   SELECT (MY_ABEND_CODE);
+     WHEN ('AD2Z') DO;
+       SQLCODE_DISPLAY = SQLCODE;
+       PUT SKIP LIST('DB2 DEADLOCK DETECTED IN XFRFUN SQLCODE=' ||
+                     CHAR(SQLCODE_DISPLAY));
+       PUT SKIP LIST('DB2 DEADLOCK FOR ACCOUNT ' || HV_ACCOUNT_ACC_NO);
+     END;
+     WHEN ('AFCR') ;  /* fall through */
+     WHEN ('AFCS') ;  /* fall through */
+     WHEN ('AFCT') DO;
+       WS_STORM_DRAIN = 'Y';
+       PUT SKIP LIST('XFRFUN: Storm Drain condition (Abend ' ||
+                     MY_ABEND_CODE || ') has been met.');
+       EXEC CICS SYNCPOINT ROLLBACK
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         ABNDINFO_REC = '';
+         ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+         ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+         EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+         ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+         ABND_TRANID     = EIBTRNID;
+         CALL POPULATE_TIME_DATE;
+         ABND_DATE  = WS_ORIG_DATE;
+         ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                      SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                      SUBSTR(WS_TIME_NOW,5,2);
+         ABND_UTIME_KEY = WS_U_TIME;
+         ABND_CODE      = 'HROL';
+         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+         ABND_SQLCODE   = '0';
+     ABND_FREEFORM  = 'AH010 - Unable to perform SYNCPOINT ROLLBACK.' ||
+                      ' Possible integrity issue following VSAM RLS ' ||
+                          'abend. EIBRESP=' ||
+                          SUBSTR(CHAR(EIBRESP),1,10) ||
+                          ' RESP2=' || SUBSTR(CHAR(EIBRESP2),1,10);
+         WS_CA_LEN = SIZE(ABNDINFO_REC);
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                        COMMAREA(ABNDINFO_REC)
+                        LENGTH(WS_CA_LEN) ;
+         EXEC CICS ABEND ABCODE('HROL') ;
+       END;
+       COMM_SUCCESS   = 'N';
+       COMM_FAIL_CODE = '2';
+       EXEC CICS RETURN ;
+     END;
+     OTHERWISE DO;
+       IF WS_STORM_DRAIN = 'N' THEN DO;
+         EXEC CICS ABEND ABCODE(MY_ABEND_CODE) NODUMP ;
+       END;
+     END;
+   END;
+
+ END XFRFUN;

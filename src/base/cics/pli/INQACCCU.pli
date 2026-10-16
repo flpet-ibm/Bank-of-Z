@@ -1,0 +1,515 @@
+ *PROCESS CICS,SQL;
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                         */
+ /* ----------------------------------------------------------------- */
+ /*  INQACCCU - Enquire Accounts for Customer                         */
+ /*                                                                   */
+ /*  Takes an incoming customer number, validates the customer via    */
+ /*  INQCUST, then retrieves all accounts for that customer via a     */
+ /*  DB2 cursor.  Returns results in INQACCCU_COMMAREA.               */
+ /*  If any error occurs the program abends.                          */
+ /* ----------------------------------------------------------------- */
+ INQACCCU: PROCEDURE OPTIONS(MAIN REENTRANT);
+
+   /* ----------------------------------------------------------------*/
+   /*  SQLCA - must be first EXEC SQL statement                       */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL INCLUDE SQLCA;
+
+   /* ----------------------------------------------------------------*/
+   /*  ACCOUNT table declaration                                      */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL DECLARE ACCOUNT TABLE
+     ( ACCOUNT_EYECATCHER          CHAR(4),
+       ACCOUNT_CUSTOMER_NUMBER     CHAR(10),
+       ACCOUNT_SORTCODE            CHAR(6)       NOT NULL,
+       ACCOUNT_NUMBER              CHAR(8)       NOT NULL,
+       ACCOUNT_TYPE                CHAR(8),
+       ACCOUNT_INTEREST_RATE       DECIMAL(4,2),
+       ACCOUNT_OPENED              DATE,
+       ACCOUNT_OVERDRAFT_LIMIT     INTEGER,
+       ACCOUNT_LAST_STATEMENT      DATE,
+       ACCOUNT_NEXT_STATEMENT      DATE,
+       ACCOUNT_AVAILABLE_BALANCE   DECIMAL(10,2),
+       ACCOUNT_ACTUAL_BALANCE      DECIMAL(10,2) );
+
+   /* ----------------------------------------------------------------*/
+   /*  ACC_CURSOR - accounts for a given customer                     */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL DECLARE ACC_CURSOR CURSOR FOR
+     SELECT ACCOUNT_EYECATCHER,
+            ACCOUNT_CUSTOMER_NUMBER,
+            ACCOUNT_SORTCODE,
+            ACCOUNT_NUMBER,
+            ACCOUNT_TYPE,
+            ACCOUNT_INTEREST_RATE,
+            ACCOUNT_OPENED,
+            ACCOUNT_OVERDRAFT_LIMIT,
+            ACCOUNT_LAST_STATEMENT,
+            ACCOUNT_NEXT_STATEMENT,
+            ACCOUNT_AVAILABLE_BALANCE,
+            ACCOUNT_ACTUAL_BALANCE
+     FROM   ACCOUNT
+     WHERE  ACCOUNT_CUSTOMER_NUMBER = :HV_ACCOUNT_CUST_NO
+     AND    ACCOUNT_SORTCODE        = :HV_ACCOUNT_SORTCODE
+     FOR FETCH ONLY;
+
+   /* ----------------------------------------------------------------*/
+   /*  Sort code constant                                             */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE SORTCODE;
+
+   /* ----------------------------------------------------------------*/
+   /*  DB2 host variables for ACCOUNT table                           */
+   /* ----------------------------------------------------------------*/
+   DCL HV_ACCOUNT_EYECATCHER      CHAR(4);
+   DCL HV_ACCOUNT_CUST_NO         CHAR(10);
+   DCL HV_ACCOUNT_SORTCODE        CHAR(6);
+   DCL HV_ACCOUNT_ACC_NO          CHAR(8);
+   DCL HV_ACCOUNT_ACC_TYPE        CHAR(8);
+   DCL HV_ACCOUNT_INT_RATE        FIXED DEC(6,2);
+   DCL HV_ACCOUNT_OPENED          CHAR(10);   /* DATE as CHAR(10)     */
+   DCL HV_ACCOUNT_OVERDRAFT_LIM   FIXED BIN(31);
+   DCL HV_ACCOUNT_LAST_STMT       CHAR(10);   /* DATE as CHAR(10)     */
+   DCL HV_ACCOUNT_NEXT_STMT       CHAR(10);   /* DATE as CHAR(10)     */
+   DCL HV_ACCOUNT_AVAIL_BAL       FIXED DEC(12,2);
+   DCL HV_ACCOUNT_ACTUAL_BAL      FIXED DEC(12,2);
+
+   /* ----------------------------------------------------------------*/
+   /*  Date reformatting work area (YYYY-MM-DD from DB2)              */
+   /* ----------------------------------------------------------------*/
+   DCL 1 DB2_DATE_REFORMAT,
+         2 DB2_DATE_REF_YR          CHAR(4),
+         2 DB2_DATE_REF_SEP1        CHAR(1),
+         2 DB2_DATE_REF_MNTH        CHAR(2),
+         2 DB2_DATE_REF_SEP2        CHAR(1),
+         2 DB2_DATE_REF_DAY         CHAR(2);
+
+   /* ----------------------------------------------------------------*/
+   /*  CICS response codes                                            */
+   /* ----------------------------------------------------------------*/
+   DCL WS_CICS_RESP               FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2              FIXED BIN(31) INIT(0);
+
+   /* ----------------------------------------------------------------*/
+   /*  Miscellaneous work variables                                   */
+   /* ----------------------------------------------------------------*/
+   DCL WS_STORM_DRAIN              CHAR(1)  INIT('N');
+   DCL STORM_DRAIN_CONDITION       CHAR(20);
+   DCL SQLCODE_DISPLAY             FIXED BIN(31);
+   DCL MY_ABEND_CODE               CHAR(4);
+   DCL WS_ABEND_PGM                CHAR(8)  INIT('ABNDPROC');
+   DCL WS_CA_LEN                   FIXED BIN(15);
+
+   /* Time / date working storage */
+   DCL WS_U_TIME                   FIXED DEC(15,0) INIT(0);
+   DCL WS_ORIG_DATE                CHAR(10);
+   DCL WS_TIME_NOW                 CHAR(6);
+
+   /* ----------------------------------------------------------------*/
+   /*  Abend info record                                              */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE ABNDINFO;
+
+   /* ----------------------------------------------------------------*/
+   /*  INQCUST commarea (used for customer validation)                */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE INQCUSTZ;
+   DCL INQCUST_CA_PTR              POINTER;
+   DCL 1 INQCUST_WORK_CA           LIKE INQCUST_COMMAREA;
+
+   /* ----------------------------------------------------------------*/
+   /*  COMMAREA (INQACCCU interface)                                  */
+   /* ----------------------------------------------------------------*/
+   DCL COMMAREA_PTR                POINTER;
+   %INCLUDE INQACCCU;
+   DCL 1 DFHCOMMAREA BASED(COMMAREA_PTR)
+                     LIKE INQACCCU_COMMAREA;
+
+   /* ================================================================*/
+   /*  MAIN PROCEDURE LOGIC                                           */
+   /* ================================================================*/
+
+   /* Set up abend handler */
+   EXEC CICS HANDLE ABEND LABEL(ABEND_HANDLING) ;
+
+   /* Get the COMMAREA address */
+   EXEC CICS ADDRESS
+        COMMAREA(COMMAREA_PTR)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   /* Initialise output flags */
+   COMM_SUCCESS   = 'N';
+   COMM_FAIL_CODE = '0';
+
+   /* Set up sort code */
+   /* (CUSTOMER_NUMBER_CA is the input customer number) */
+
+   /* Validate customer by linking to INQCUST */
+   CALL CUSTOMER_CHECK;
+
+   IF CUSTOMER_FOUND = 'N' THEN DO;
+     COMM_SUCCESS   = 'N';
+     COMM_FAIL_CODE = '1';
+     CALL GET_ME_OUT_OF_HERE;
+   END;
+
+   /* Retrieve accounts for this customer */
+   CALL READ_ACCOUNT_DB2;
+
+   CALL GET_ME_OUT_OF_HERE;
+
+ /* ------------------------------------------------------------------*/
+ /*  CUSTOMER_CHECK - link to INQCUST to verify customer exists       */
+ /* ------------------------------------------------------------------*/
+ CUSTOMER_CHECK: PROCEDURE;
+
+   IF CUSTOMER_NUMBER_CA = '0000000000' |
+      CUSTOMER_NUMBER_CA = '9999999999' THEN DO;
+     CUSTOMER_FOUND     = 'N';
+     NUMBER_OF_ACCOUNTS = 0;
+     RETURN;
+   END;
+
+   INQCUST_WORK_CA = '';
+   INQCUST_WORK_CA.INQCUST_CUSTNO = CUSTOMER_NUMBER_CA;
+
+   WS_CA_LEN = SIZE(INQCUST_WORK_CA);
+   EXEC CICS LINK PROGRAM('INQCUST ')
+                  COMMAREA(INQCUST_WORK_CA)
+                  LENGTH(WS_CA_LEN)
+                  RESP(WS_CICS_RESP)
+                  RESP2(WS_CICS_RESP2) ;
+
+   IF INQCUST_WORK_CA.INQCUST_INQ_SUCCESS = 'Y' THEN
+     CUSTOMER_FOUND = 'Y';
+   ELSE DO;
+     CUSTOMER_FOUND     = 'N';
+     NUMBER_OF_ACCOUNTS = 0;
+   END;
+
+ END CUSTOMER_CHECK;
+
+ /* ------------------------------------------------------------------*/
+ /*  READ_ACCOUNT_DB2 - Open cursor, fetch all rows, close            */
+ /* ------------------------------------------------------------------*/
+ READ_ACCOUNT_DB2: PROCEDURE;
+
+   HV_ACCOUNT_CUST_NO  = CUSTOMER_NUMBER_CA;
+   HV_ACCOUNT_SORTCODE = SORTCODE;
+
+   EXEC SQL OPEN ACC_CURSOR ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+     CALL CHECK_FOR_STORM_DRAIN_DB2;
+     COMM_SUCCESS       = 'N';
+     CUSTOMER_FOUND     = 'N';
+     COMM_FAIL_CODE     = '2';
+     NUMBER_OF_ACCOUNTS = 0;
+
+     EXEC CICS SYNCPOINT ROLLBACK
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       ABNDINFO_REC       = '' ;
+       ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+       ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+       EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+       ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+       ABND_TRANID        = EIBTRNID;
+       CALL POPULATE_TIME_DATE;
+       ABND_DATE          = WS_ORIG_DATE;
+       ABND_TIME          = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                            SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                            SUBSTR(WS_TIME_NOW,5,2);
+       ABND_UTIME_KEY     = WS_U_TIME;
+       ABND_CODE          = 'HROL';
+       EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+       ABND_SQLCODE       = '0';
+       ABND_FREEFORM      = 'RAD010 - Unable to perform Syncpoint ' ||
+                            'Rollback. Possible Integrity issue ' ||
+                            'following DB2 CURSOR OPEN' ||
+                            ' EIBRESP=' || ABND_RESPCODE ||
+                            ' RESP2=' || ABND_RESP2CODE;
+       WS_CA_LEN = SIZE(ABNDINFO_REC);
+       EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                      COMMAREA(ABNDINFO_REC)
+                      LENGTH(WS_CA_LEN) ;
+       EXEC CICS ABEND ABCODE('HROL') CANCEL NODUMP ;
+     END;
+     RETURN;
+   END;
+
+   CALL FETCH_DATA;
+
+   EXEC SQL CLOSE ACC_CURSOR ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+     CALL CHECK_FOR_STORM_DRAIN_DB2;
+     COMM_SUCCESS   = 'N';
+     CUSTOMER_FOUND = 'N';
+     COMM_FAIL_CODE = '4';
+
+     EXEC CICS SYNCPOINT ROLLBACK
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       ABNDINFO_REC       = '' ;
+       ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+       ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+       EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+       ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+       ABND_TRANID        = EIBTRNID;
+       CALL POPULATE_TIME_DATE;
+       ABND_DATE          = WS_ORIG_DATE;
+       ABND_TIME          = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                            SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                            SUBSTR(WS_TIME_NOW,5,2);
+       ABND_UTIME_KEY     = WS_U_TIME;
+       ABND_CODE          = 'HROL';
+       EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+       ABND_SQLCODE       = '0';
+      ABND_FREEFORM      = 'RAD010(2) - Unable to perform Syncpoint ' ||
+                            'Rollback. Possible Integrity issue ' ||
+                            'following CURSOR CLOSE' ||
+                            ' EIBRESP=' || ABND_RESPCODE ||
+                            ' RESP2=' || ABND_RESP2CODE;
+       WS_CA_LEN = SIZE(ABNDINFO_REC);
+       EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                      COMMAREA(ABNDINFO_REC)
+                      LENGTH(WS_CA_LEN) ;
+       EXEC CICS ABEND ABCODE('HROL') CANCEL NODUMP ;
+     END;
+     RETURN;
+   END;
+
+   COMM_SUCCESS = 'Y';
+
+ END READ_ACCOUNT_DB2;
+
+ /* ------------------------------------------------------------------*/
+ /*  FETCH_DATA - Fetch up to 20 account rows                         */
+ /* ------------------------------------------------------------------*/
+ FETCH_DATA: PROCEDURE;
+
+   NUMBER_OF_ACCOUNTS = 0;
+
+   DO WHILE (SQLCODE = 0 & NUMBER_OF_ACCOUNTS < 20);
+
+     EXEC SQL FETCH FROM ACC_CURSOR
+       INTO :HV_ACCOUNT_EYECATCHER,
+            :HV_ACCOUNT_CUST_NO,
+            :HV_ACCOUNT_SORTCODE,
+            :HV_ACCOUNT_ACC_NO,
+            :HV_ACCOUNT_ACC_TYPE,
+            :HV_ACCOUNT_INT_RATE,
+            :HV_ACCOUNT_OPENED,
+            :HV_ACCOUNT_OVERDRAFT_LIM,
+            :HV_ACCOUNT_LAST_STMT,
+            :HV_ACCOUNT_NEXT_STMT,
+            :HV_ACCOUNT_AVAIL_BAL,
+            :HV_ACCOUNT_ACTUAL_BAL ;
+
+     IF SQLCODE = 100 THEN DO;     /* no more rows */
+       COMM_SUCCESS = 'Y';
+       RETURN;
+     END;
+
+     IF SQLCODE ^= 0 THEN DO;
+       SQLCODE_DISPLAY = SQLCODE;
+       CALL CHECK_FOR_STORM_DRAIN_DB2;
+       COMM_SUCCESS       = 'N';
+       CUSTOMER_FOUND     = 'N';
+       NUMBER_OF_ACCOUNTS = 0;
+       COMM_FAIL_CODE     = '3';
+
+       EXEC CICS SYNCPOINT ROLLBACK
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         ABNDINFO_REC       = '' ;
+         ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+         ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+         EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+         ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+         ABND_TRANID        = EIBTRNID;
+         CALL POPULATE_TIME_DATE;
+         ABND_DATE          = WS_ORIG_DATE;
+         ABND_TIME          = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                              SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                              SUBSTR(WS_TIME_NOW,5,2);
+         ABND_UTIME_KEY     = WS_U_TIME;
+         ABND_CODE          = 'HROL';
+         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+         ABND_SQLCODE       = '0';
+         ABND_FREEFORM      = 'FD010 - Unable to perform Syncpoint ' ||
+                              'Rollback. Possible Integrity issue ' ||
+                              'following DB2 FETCH' ||
+                              ' EIBRESP=' || ABND_RESPCODE ||
+                              ' RESP2=' || ABND_RESP2CODE;
+         WS_CA_LEN = SIZE(ABNDINFO_REC);
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                        COMMAREA(ABNDINFO_REC)
+                        LENGTH(WS_CA_LEN) ;
+         EXEC CICS ABEND ABCODE('HROL') CANCEL NODUMP ;
+       END;
+       RETURN;
+     END;
+
+     NUMBER_OF_ACCOUNTS = NUMBER_OF_ACCOUNTS + 1;
+
+     /* Map host variables into COMMAREA account array */
+     COMM_EYE(NUMBER_OF_ACCOUNTS)      = HV_ACCOUNT_EYECATCHER;
+     COMM_CUSTNO(NUMBER_OF_ACCOUNTS)   = HV_ACCOUNT_CUST_NO;
+     COMM_SCODE(NUMBER_OF_ACCOUNTS)    = HV_ACCOUNT_SORTCODE;
+     COMM_ACCNO(NUMBER_OF_ACCOUNTS)    = HV_ACCOUNT_ACC_NO;
+     COMM_ACC_TYPE(NUMBER_OF_ACCOUNTS) = HV_ACCOUNT_ACC_TYPE;
+     COMM_INT_RATE(NUMBER_OF_ACCOUNTS) = HV_ACCOUNT_INT_RATE;
+
+     DB2_DATE_REFORMAT = HV_ACCOUNT_OPENED;
+     COMM_OPENED(NUMBER_OF_ACCOUNTS) =
+    DEC(DB2_DATE_REF_DAY || DB2_DATE_REF_MNTH || DB2_DATE_REF_YR, 8, 0);
+
+     COMM_OVERDRAFT(NUMBER_OF_ACCOUNTS)  = HV_ACCOUNT_OVERDRAFT_LIM;
+
+     DB2_DATE_REFORMAT = HV_ACCOUNT_LAST_STMT;
+     COMM_LAST_STMT_DT(NUMBER_OF_ACCOUNTS) =
+    DEC(DB2_DATE_REF_DAY || DB2_DATE_REF_MNTH || DB2_DATE_REF_YR, 8, 0);
+
+     DB2_DATE_REFORMAT = HV_ACCOUNT_NEXT_STMT;
+     COMM_NEXT_STMT_DT(NUMBER_OF_ACCOUNTS) =
+    DEC(DB2_DATE_REF_DAY || DB2_DATE_REF_MNTH || DB2_DATE_REF_YR, 8, 0);
+
+     COMM_ACTUAL_BAL(NUMBER_OF_ACCOUNTS) = HV_ACCOUNT_ACTUAL_BAL;
+     COMM_AVAIL_BAL(NUMBER_OF_ACCOUNTS)  = HV_ACCOUNT_AVAIL_BAL;
+
+   END; /* DO WHILE */
+
+ END FETCH_DATA;
+
+ /* ------------------------------------------------------------------*/
+ /*  GET_ME_OUT_OF_HERE - Return control to CICS                      */
+ /* ------------------------------------------------------------------*/
+ GET_ME_OUT_OF_HERE: PROCEDURE;
+
+   EXEC CICS RETURN ;
+
+ END GET_ME_OUT_OF_HERE;
+
+ /* ------------------------------------------------------------------*/
+ /*  CHECK_FOR_STORM_DRAIN_DB2 - Classify SQLCODE for storm drain     */
+ /* ------------------------------------------------------------------*/
+ CHECK_FOR_STORM_DRAIN_DB2: PROCEDURE;
+
+   SELECT (SQLCODE);
+     WHEN (923)  STORM_DRAIN_CONDITION = 'DB2 Connection lost ';
+     OTHERWISE   STORM_DRAIN_CONDITION = 'Not Storm Drain     ';
+   END;
+
+   IF STORM_DRAIN_CONDITION ^= 'Not Storm Drain     ' THEN
+     PUT SKIP LIST('INQACCCU: Storm Drain condition (' ||
+                   STORM_DRAIN_CONDITION || ') SQLCODE=' ||
+                   CHAR(SQLCODE));
+
+ END CHECK_FOR_STORM_DRAIN_DB2;
+
+ /* ------------------------------------------------------------------*/
+ /*  POPULATE_TIME_DATE - Get current date and time via CICS          */
+ /* ------------------------------------------------------------------*/
+ POPULATE_TIME_DATE: PROCEDURE;
+
+   EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+
+   EXEC CICS FORMATTIME
+        ABSTIME(WS_U_TIME)
+        DDMMYYYY(WS_ORIG_DATE)
+        TIME(WS_TIME_NOW)
+        DATESEP ;
+
+ END POPULATE_TIME_DATE;
+
+ /* ------------------------------------------------------------------*/
+ /*  ABEND_HANDLING - Handle CICS abends                              */
+ /* ------------------------------------------------------------------*/
+ ABEND_HANDLING:
+   EXEC CICS ASSIGN ABCODE(MY_ABEND_CODE) ;
+
+   SELECT (MY_ABEND_CODE);
+     WHEN ('AD2Z') DO;
+       SQLCODE_DISPLAY = SQLCODE;
+       PUT SKIP LIST('DB2 DEADLOCK DETECTED IN INQACCCU SQLCODE=' ||
+                     CHAR(SQLCODE_DISPLAY));
+       PUT SKIP LIST('DB2 DEADLOCK FOR ACCOUNT ' || HV_ACCOUNT_ACC_NO);
+     END;
+     WHEN ('AFCR') ;  /* fall through */
+     WHEN ('AFCS') ;  /* fall through */
+     WHEN ('AFCT') DO;
+       WS_STORM_DRAIN = 'Y';
+       PUT SKIP LIST('INQACCCU: Storm Drain condition (Abend ' ||
+                     MY_ABEND_CODE || ') has been met.');
+       EXEC CICS SYNCPOINT ROLLBACK
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         ABNDINFO_REC       = '' ;
+         ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+         ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+         EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+         ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+         ABND_TRANID        = EIBTRNID;
+         CALL POPULATE_TIME_DATE;
+         ABND_DATE          = WS_ORIG_DATE;
+         ABND_TIME          = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                              SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                              SUBSTR(WS_TIME_NOW,5,2);
+         ABND_UTIME_KEY     = WS_U_TIME;
+         ABND_CODE          = 'HROL';
+         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+         ABND_SQLCODE       = '0';
+         ABND_FREEFORM      = 'AH010 -Unable to perform SYNCPOINT ' ||
+                              'ROLLBACK. Possible integrity issue ' ||
+                              'following VSAM RLS abend.' ||
+                              ' EIBRESP=' || ABND_RESPCODE ||
+                              ' RESP2=' || ABND_RESP2CODE;
+         WS_CA_LEN = SIZE(ABNDINFO_REC);
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                        COMMAREA(ABNDINFO_REC)
+                        LENGTH(WS_CA_LEN) ;
+         EXEC CICS ABEND ABCODE('HROL') CANCEL NODUMP ;
+       END;
+       COMM_SUCCESS = 'N';
+       EXEC CICS RETURN ;
+     END;
+     OTHERWISE DO;
+       ABNDINFO_REC       = '' ;
+       ABND_RESPCODE      = SUBSTR(CHAR(EIBRESP),  1, 10);
+       ABND_RESP2CODE     = SUBSTR(CHAR(EIBRESP2), 1, 10);
+       EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+       ABND_TASKNO_KEY    = SUBSTR(CHAR(EIBTASKN), 1, 4);
+       ABND_TRANID        = EIBTRNID;
+       CALL POPULATE_TIME_DATE;
+       ABND_DATE          = WS_ORIG_DATE;
+       ABND_TIME          = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                            SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                            SUBSTR(WS_TIME_NOW,5,2);
+       ABND_UTIME_KEY     = WS_U_TIME;
+       ABND_CODE          = MY_ABEND_CODE;
+       EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+       ABND_SQLCODE       = '0';
+       ABND_FREEFORM      = 'AH010 - WS_STORM_DRAIN=N EIBRESP=' ||
+                            SUBSTR(CHAR(EIBRESP), 1, 10);
+       WS_CA_LEN = SIZE(ABNDINFO_REC);
+       EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                      COMMAREA(ABNDINFO_REC)
+                      LENGTH(WS_CA_LEN) ;
+       EXEC CICS ABEND ABCODE(MY_ABEND_CODE) CANCEL NODUMP ;
+     END;
+   END; /* SELECT */
+
+ END INQACCCU;

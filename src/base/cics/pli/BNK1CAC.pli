@@ -1,0 +1,897 @@
+ *PROCESS CICS;
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                         */
+ /* ----------------------------------------------------------------- */
+ /*  BNK1CAC - Create Account                                         */
+ /*  Converted from COBOL BNK1CAC.cbl                                 */
+ /*  Verifies input and links to CREACC to add Account.               */
+ /* ----------------------------------------------------------------- */
+ BNK1CAC: PROCEDURE OPTIONS(MAIN REENTRANT);
+
+   /* --------------------------------------------------------------- */
+   /*  BMS map include (BNK1CAM mapset)                               */
+   /* --------------------------------------------------------------- */
+   %INCLUDE BNK1CAM;
+
+   /* --------------------------------------------------------------- */
+   /*  Abend info structure                                           */
+   /* --------------------------------------------------------------- */
+   %INCLUDE ABNDINFO;
+
+   /* --------------------------------------------------------------- */
+   /*  CREACC commarea structure                                      */
+   /* --------------------------------------------------------------- */
+   %INCLUDE CREACC;
+
+   /* --------------------------------------------------------------- */
+   /*  CICS response codes                                            */
+   /* --------------------------------------------------------------- */
+   DCL WS_CICS_RESP          FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2         FIXED BIN(31) INIT(0);
+
+   /* --------------------------------------------------------------- */
+   /*  Fail info (mirrors WS-FAIL-INFO)                               */
+   /* --------------------------------------------------------------- */
+   DCL 1 WS_FAIL_INFO,
+         2 WS_FI_PGM         CHAR(9)  INIT('BNK1CAC  '),
+         2 WS_CICS_FAIL_MSG  CHAR(70) INIT(' '),
+         2 WS_FI_RESP_LBL    CHAR(6)  INIT(' RESP='),
+         2 WS_CICS_RESP_DISP CHAR(10) INIT('0000000000'),
+         2 WS_FI_RESP2_LBL   CHAR(7)  INIT(' RESP2='),
+         2 WS_CICS_RESP2_DISP CHAR(10) INIT('0000000000'),
+         2 WS_FI_ABEND       CHAR(15) INIT(' ABENDING TASK.');
+
+   /* --------------------------------------------------------------- */
+   /*  Switches and flags                                             */
+   /* --------------------------------------------------------------- */
+   DCL VALID_DATA_SW          CHAR(1) INIT('Y');
+   DCL SEND_FLAG              CHAR(1);
+   DCL SEND_ERASE_C           CHAR(1) INIT('1');
+   DCL SEND_DATAONLY_C        CHAR(1) INIT('2');
+   DCL SEND_DATAONLY_ALARM_C  CHAR(1) INIT('3');
+
+   /* --------------------------------------------------------------- */
+   /*  End of session message                                         */
+   /* --------------------------------------------------------------- */
+   DCL END_OF_SESSION_MESSAGE CHAR(13) INIT('Session Ended');
+
+   /* --------------------------------------------------------------- */
+   /*  Response code                                                  */
+   /* --------------------------------------------------------------- */
+   DCL RESPONSE_CODE          FIXED BIN(31) INIT(0);
+
+   /* --------------------------------------------------------------- */
+   /*  Communication area (single char - COBOL 01 COMMUNICATION-AREA) */
+   /* --------------------------------------------------------------- */
+   DCL COMMUNICATION_AREA     CHAR(1) INIT(' ');
+
+   /* --------------------------------------------------------------- */
+   /*  Working-storage commarea (for RETURN COMMAREA)                 */
+   /* --------------------------------------------------------------- */
+   DCL 1 WS_COMM_AREA,
+         2 WS_COMM_CUSTNO    CHAR(10) INIT(' '),
+         2 WS_COMM_ACCTYPE   CHAR(8)  INIT(' '),
+         2 WS_COMM_INTRT     FIXED DEC(6,2) INIT(0),
+         2 WS_COMM_OVERDR    FIXED DEC(8,0) INIT(0);
+
+   /* --------------------------------------------------------------- */
+   /*  Interest rate work areas                                       */
+   /* --------------------------------------------------------------- */
+   DCL INTRTI_COMP_1          FLOAT DEC(6) INIT(0);
+   DCL INTRT_PIC9             CHAR(7);
+
+   /* --------------------------------------------------------------- */
+   /*  Overdraft / interest string work areas                         */
+   /* --------------------------------------------------------------- */
+   DCL WS_NUM_COUNT_POINT     FIXED BIN(31) INIT(0);
+   DCL WS_NUM_COUNT_TOTAL     FIXED BIN(31) INIT(0);
+   DCL WS_REVERSE             CHAR(8);
+
+   /* --------------------------------------------------------------- */
+   /*  Balance display work areas                                     */
+   /* --------------------------------------------------------------- */
+   DCL AVAILABLE_BALANCE_DISP CHAR(14);
+   DCL ACTUAL_BALANCE_DISP    CHAR(14);
+
+   /* --------------------------------------------------------------- */
+   /*  Date / time working storage                                    */
+   /* --------------------------------------------------------------- */
+   DCL WS_U_TIME              FIXED DEC(15,0) INIT(0);
+   DCL WS_ORIG_DATE           CHAR(10);
+   DCL WS_TIME_NOW            CHAR(6);
+
+   /* --------------------------------------------------------------- */
+   /*  Abend program name                                             */
+   /* --------------------------------------------------------------- */
+   DCL WS_ABEND_PGM           CHAR(8) INIT('ABNDPROC');
+
+   /* --------------------------------------------------------------- */
+   /*  Length work variable                                           */
+   /* --------------------------------------------------------------- */
+   DCL WS_CA_LEN              FIXED BIN(15);
+
+   /* --------------------------------------------------------------- */
+   /*  DFHAID constants (hex values per IBM DFHAID)                   */
+   /* --------------------------------------------------------------- */
+   DCL DFHENTER  CHAR(1) INIT('7D'X); /* Enter key              */
+   DCL DFHCLEAR  CHAR(1) INIT('6D'X); /* Clear key              */
+   DCL DFHPA1    CHAR(1) INIT('6C'X); /* PA1 key                */
+   DCL DFHPA2    CHAR(1) INIT('6E'X); /* PA2 key                */
+   DCL DFHPA3    CHAR(1) INIT('6B'X); /* PA3 key                */
+   DCL DFHPF3    CHAR(1) INIT('F3'X); /* PF3 key                */
+   DCL DFHPF12   CHAR(1) INIT('7C'X); /* PF12 key               */
+   DCL DFHAID    CHAR(1) INIT('7D'X); /* AID (enter)            */
+
+   /* --------------------------------------------------------------- */
+   /*  COMMAREA (based - from DFHCOMMAREA via EIBCALEN)               */
+   /* --------------------------------------------------------------- */
+   DCL COMMAREA_PTR           POINTER;
+   DCL 1 DFHCOMMAREA BASED(COMMAREA_PTR),
+         2 COMM_CUSTNO        CHAR(10),
+         2 COMM_ACCTYPE       CHAR(8),
+         2 COMM_INTRT         FIXED DEC(6,2),
+         2 COMM_OVERDR        FIXED DEC(8,0);
+
+   /* =============================================================== */
+   /*  MAIN PROCEDURE LOGIC (PREMIERE / A010)                         */
+   /* =============================================================== */
+
+   /* Set up abend handler */
+   EXEC CICS HANDLE ABEND LABEL(ABEND_HANDLING) ;
+
+   /* Set output overlay pointer */
+   BNK1CAO_PTR = ADDR(BNK1CAI);
+
+   /* First time through? */
+   IF EIBCALEN = 0 THEN DO;
+     BNK1CAI      = '';
+     CUSTNOL      = -1;
+     SEND_FLAG    = SEND_ERASE_C;
+     MESSAGEO     = ' ';
+     CALL SEND_MAP;
+   END;
+   ELSE IF EIBAID = DFHPA1 | EIBAID = DFHPA2
+         | EIBAID = DFHPA3 THEN
+     /* PA key - just continue */;
+   ELSE IF EIBAID = DFHPF3 THEN DO;
+     EXEC CICS RETURN
+          TRANSID('OMEN')
+          IMMEDIATE
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+   END;
+   ELSE IF EIBAID = DFHAID | EIBAID = DFHPF12 THEN DO;
+     CALL SEND_TERMINATION_MSG;
+     EXEC CICS RETURN ;
+   END;
+   ELSE IF EIBAID = DFHCLEAR THEN DO;
+     EXEC CICS SEND CONTROL
+          ERASE
+          FREEKB ;
+     EXEC CICS RETURN ;
+   END;
+   ELSE IF EIBAID = DFHENTER THEN
+     CALL PROCESS_MAP;
+   ELSE DO;
+     BNK1CAI  = '';
+     MESSAGEO = 'Invalid key pressed.';
+     SEND_FLAG = SEND_DATAONLY_ALARM_C;
+     CALL SEND_MAP;
+   END;
+
+   /* --------------------------------------------------------------- */
+   /*  End of A010 - set commarea for RETURN TRANSID(OCAC)            */
+   /* --------------------------------------------------------------- */
+   IF EIBCALEN ^= 0 THEN DO;
+     COMMAREA_PTR     = ADDRESS OF DFHCOMMAREA;
+     WS_COMM_CUSTNO   = COMM_CUSTNO;
+     WS_COMM_ACCTYPE  = COMM_ACCTYPE;
+     WS_COMM_INTRT    = COMM_INTRT;
+     WS_COMM_OVERDR   = COMM_OVERDR;
+   END;
+   ELSE DO;
+     WS_COMM_CUSTNO  = ' ';
+     WS_COMM_ACCTYPE = ' ';
+     WS_COMM_INTRT   = 0;
+     WS_COMM_OVERDR  = 0;
+   END;
+
+   EXEC CICS RETURN
+        TRANSID('OCAC')
+        COMMAREA(WS_COMM_AREA)
+        LENGTH(32)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+     ABNDINFO_REC   = '';
+     ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE  = WS_ORIG_DATE;
+     ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE      = 'HBNK';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE  = '0';
+     ABND_FREEFORM =
+       'A010- RETURN TRANSID(OCAC) FAIL' ||
+       ' EIBRESP=' || ABND_RESPCODE ||
+       ' RESP2='   || ABND_RESP2CODE;
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     WS_CICS_FAIL_MSG =
+       'BNK1CAC - A010 - RETURN TRANSID(OCAC) FAIL';
+     WS_CICS_RESP_DISP  = SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+     WS_CICS_RESP2_DISP = SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+     CALL ABEND_THIS_TASK;
+   END;
+
+   /* =============================================================== */
+   /*  PROCESS_MAP - PM010                                            */
+   /* =============================================================== */
+   PROCESS_MAP: PROCEDURE;
+
+     CALL RECEIVE_MAP;
+     CALL EDIT_DATA;
+     IF VALID_DATA_SW = 'Y' THEN
+       CALL CRE_ACC_DATA;
+     SEND_FLAG = SEND_DATAONLY_ALARM_C;
+     CALL SEND_MAP;
+
+   END PROCESS_MAP;
+
+   /* =============================================================== */
+   /*  RECEIVE_MAP - RM010                                            */
+   /* =============================================================== */
+   RECEIVE_MAP: PROCEDURE;
+
+     EXEC CICS RECEIVE
+          MAP('BNK1CA')
+          MAPSET('BNK1CAM')
+          INTO(BNK1CAI)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       ABNDINFO_REC   = '';
+       ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+       ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+       EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+       ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+       ABND_TRANID     = EIBTRNID;
+       CALL POPULATE_TIME_DATE;
+       ABND_DATE  = WS_ORIG_DATE;
+       ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                    SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                    SUBSTR(WS_TIME_NOW,5,2);
+       ABND_UTIME_KEY = WS_U_TIME;
+       ABND_CODE      = 'HBNK';
+       EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+       ABND_SQLCODE  = '0';
+       ABND_FREEFORM =
+         'RM010 - RECEIVE MAP FAIL.' ||
+         ' EIBRESP=' || ABND_RESPCODE ||
+         ' RESP2='   || ABND_RESP2CODE;
+       WS_CA_LEN = SIZE(ABNDINFO_REC);
+       EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                      COMMAREA(ABNDINFO_REC)
+                      LENGTH(WS_CA_LEN) ;
+       WS_CICS_FAIL_MSG =
+         'BNK1CAC - RM010 - RECEIVE MAP FAIL ';
+       WS_CICS_RESP_DISP  = SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+       WS_CICS_RESP2_DISP = SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+       CALL ABEND_THIS_TASK;
+     END;
+
+   END RECEIVE_MAP;
+
+   /* =============================================================== */
+   /*  EDIT_DATA - ED010                                              */
+   /* =============================================================== */
+   EDIT_DATA: PROCEDURE;
+
+     DCL ED_DONE LABEL;
+
+     /* BIF DEEDIT equivalent: strip non-numerics from CUSTNOI */
+     EXEC CICS BIF DEEDIT
+          FIELD(CUSTNOI) ;
+
+     IF CUSTNOL < 1 | CUSTNOI = '__________' THEN DO;
+       MESSAGEO = 'Please enter a 10 digit Customer Number  ';
+       VALID_DATA_SW = 'N';
+       CUSTNOL = -1;
+       GOTO ED_DONE;
+     END;
+
+     IF VERIFY(CUSTNOI, '0123456789') ^= 0 THEN DO;
+       MESSAGEO = 'Please enter a numeric Customer number   ';
+       VALID_DATA_SW = 'N';
+       CUSTNOL = -1;
+       GOTO ED_DONE;
+     END;
+
+     IF ACCTYPI = '________' | ACCTYPL < 1 THEN DO;
+       MESSAGEO =
+         'Account Type should be ISA,CURRENT,LOAN,' ||
+         'SAVING or MORTGAGE';
+       VALID_DATA_SW = 'N';
+       ACCTYPL = -1;
+       GOTO ED_DONE;
+     END;
+
+     MESSAGEO = ' ';
+
+     IF ACCTYPL > 0 THEN DO;
+       SELECT (ACCTYPI);
+         WHEN ('ISA_____') ACCTYPI = 'ISA     ';
+         WHEN ('isa_____') ACCTYPI = 'ISA     ';
+         WHEN ('ISA     ') /* ok */;
+         WHEN ('isa     ') ACCTYPI = 'ISA     ';
+         WHEN ('CURRENT_') ACCTYPI = 'CURRENT ';
+         WHEN ('current_') ACCTYPI = 'CURRENT ';
+         WHEN ('CURRENT ') /* ok */;
+         WHEN ('current ') ACCTYPI = 'CURRENT ';
+         WHEN ('LOAN____') ACCTYPI = 'LOAN    ';
+         WHEN ('loan____') ACCTYPI = 'LOAN    ';
+         WHEN ('loan    ') ACCTYPI = 'LOAN    ';
+         WHEN ('LOAN    ') /* ok */;
+         WHEN ('SAVING__') ACCTYPI = 'SAVING  ';
+         WHEN ('saving__') ACCTYPI = 'SAVING  ';
+         WHEN ('saving  ') ACCTYPI = 'SAVING  ';
+         WHEN ('SAVING  ') /* ok */;
+         WHEN ('MORTGAGE') /* ok */;
+         WHEN ('mortgage') ACCTYPI = 'MORTGAGE';
+         OTHERWISE DO;
+           MESSAGEO =
+             'Account Type should be ISA,CURRENT,LOAN,' ||
+             'SAVING or MORTGAGE';
+           VALID_DATA_SW = 'N';
+           ACCTYPL = -1;
+           GOTO ED_DONE;
+         END;
+       END; /* SELECT */
+     END;
+
+     IF INTRTL = 0 THEN DO;
+       MESSAGEO = 'Please supply a numeric interest rate    ';
+       VALID_DATA_SW = 'N';
+       INTRTL = -1;
+       GOTO ED_DONE;
+     END;
+
+     IF VERIFY(SUBSTR(INTRTI,1,INTRTL),
+               '0123456789. -+') ^= 0 THEN DO;
+       WS_NUM_COUNT_TOTAL = INTRTL -
+         VERIFY(SUBSTR(INTRTI,1,INTRTL), '0123456789. -+');
+       IF WS_NUM_COUNT_TOTAL < INTRTL THEN DO;
+         MESSAGEO = 'Please supply a numeric interest rate    ';
+         VALID_DATA_SW = 'N';
+         INTRTL = -1;
+         GOTO ED_DONE;
+       END;
+     END;
+
+     /* Count decimal points */
+     WS_NUM_COUNT_POINT = 0;
+     WS_NUM_COUNT_TOTAL = 0;
+     BEGIN;
+       DCL I FIXED BIN(31);
+       DO I = 1 TO INTRTL;
+         IF SUBSTR(INTRTI,I,1) = '.' THEN
+           WS_NUM_COUNT_POINT = WS_NUM_COUNT_POINT + 1;
+       END;
+     END;
+
+     IF WS_NUM_COUNT_POINT > 1 THEN DO;
+       MESSAGEO =
+         'Use one decimal point for interest rate only';
+       VALID_DATA_SW = 'N';
+       INTRTL = -1;
+       GOTO ED_DONE;
+     END;
+
+     IF WS_NUM_COUNT_POINT = 1 THEN DO;
+       /* Check no more than 2 digits after decimal point */
+       BEGIN;
+         DCL DOT_POS  FIXED BIN(31) INIT(0);
+         DCL AFTER_CT FIXED BIN(31) INIT(0);
+         DCL II       FIXED BIN(31);
+         DO II = 1 TO INTRTL;
+           IF SUBSTR(INTRTI,II,1) = '.' THEN DOT_POS = II;
+         END;
+         IF DOT_POS > 0 THEN
+           AFTER_CT = INTRTL - DOT_POS;
+         IF AFTER_CT > 2 THEN DO;
+           MESSAGEO =
+             'Only up to two decimal places are supported';
+           VALID_DATA_SW = 'N';
+           INTRTL = -1;
+           GOTO ED_DONE;
+         END;
+       END;
+     END;
+
+     /* Convert interest rate string to float */
+     BEGIN;
+       DCL INTRT_WORK CHAR(7) INIT(' ');
+       INTRT_WORK = SUBSTR(INTRTI,1,INTRTL);
+       INTRTI_COMP_1 = FLOAT(INTRT_WORK);
+     END;
+
+     IF INTRTI_COMP_1 < 0 THEN DO;
+       MESSAGEO =
+         'Please supply a zero or positive interest rate';
+       VALID_DATA_SW = 'N';
+       INTRTL = -1;
+       GOTO ED_DONE;
+     END;
+
+     IF INTRTI_COMP_1 > 9999.99 THEN DO;
+       MESSAGEO =
+         'Please supply an interest rate less than 9999.99%';
+       VALID_DATA_SW = 'N';
+       INTRTL = -1;
+       GOTO ED_DONE;
+     END;
+
+     /* Strip trailing spaces from overdraft to get true length */
+     WS_REVERSE = ' ';
+     BEGIN;
+       DCL RV_I    FIXED BIN(31);
+       DCL SP_CNT  FIXED BIN(31) INIT(0);
+       DO RV_I = 8 TO 1 BY -1;
+         IF SUBSTR(OVERDRI,RV_I,1) = ' ' THEN
+           SP_CNT = SP_CNT + 1;
+         ELSE LEAVE;
+       END;
+       OVERDRL = OVERDRL - SP_CNT;
+     END;
+
+     IF OVERDRL > 0 THEN DO;
+       WS_NUM_COUNT_TOTAL = 0;
+       BEGIN;
+         DCL OV_I FIXED BIN(31);
+         DO OV_I = 1 TO OVERDRL;
+           IF VERIFY(SUBSTR(OVERDRI,OV_I,1), '0123456789')
+              = 0 THEN
+             WS_NUM_COUNT_TOTAL = WS_NUM_COUNT_TOTAL + 1;
+         END;
+       END;
+       IF WS_NUM_COUNT_TOTAL < OVERDRL THEN DO;
+         MESSAGEO =
+           'Overdraft Limit must be numeric positive int';
+         VALID_DATA_SW = 'N';
+         OVERDRL = -1;
+         GOTO ED_DONE;
+       END;
+     END;
+
+     EXEC CICS BIF DEEDIT
+          FIELD(OVERDRI) ;
+
+     IF OVERDRL < 1 | OVERDRI = '________'
+                    | OVERDRI = '        ' THEN
+       OVERDRI = '00000000';
+
+     IF VERIFY(OVERDRI, '0123456789') ^= 0 THEN DO;
+       MESSAGEO = 'The Overdraft Limit must be numeric      ';
+       VALID_DATA_SW = 'N';
+       OVERDRL = -1;
+       GOTO ED_DONE;
+     END;
+
+     IF CUSTNOL < 1 | ACCTYPL < 1 THEN DO;
+       MESSAGEO = 'Missing expected data.                   ';
+       VALID_DATA_SW = 'N';
+       GOTO ED_DONE;
+     END;
+
+     ED_DONE: ;
+
+   END EDIT_DATA;
+
+   /* =============================================================== */
+   /*  CRE_ACC_DATA - CAD010                                          */
+   /* =============================================================== */
+   CRE_ACC_DATA: PROCEDURE;
+
+     /* Initialise commarea and fill fields */
+     CREACC_COMMAREA   = '';
+     COMM_EYECATCHER   = 'ACCT';
+     COMM_SUCCESS      = 'N';
+     COMM_CUSTNO       = CUSTNOI;
+     COMM_SORTCODE     = '000000';
+     COMM_NUMBER       = '00000000';
+     COMM_ACC_TYPE     = ACCTYPI;
+
+     /* Convert interest rate string to decimal */
+     BEGIN;
+       DCL IR_WORK CHAR(7) INIT(' ');
+       IR_WORK = SUBSTR(INTRTI,1,INTRTL);
+       INTRTI_COMP_1 = FLOAT(IR_WORK);
+     END;
+     COMM_INT_RT = INTRTI_COMP_1;
+
+     COMM_OPENED        = 0;
+     COMM_OVERDR_LIM    = OVERDRI;
+     COMM_LAST_STMT_DT  = 0;
+     COMM_NEXT_STMT_DT  = 0;
+     COMM_AVAIL_BAL     = 0;
+     COMM_ACT_BAL       = 0;
+     COMM_FAIL_CODE     = ' ';
+
+     WS_CA_LEN = SIZE(CREACC_COMMAREA);
+     EXEC CICS LINK
+          PROGRAM('CREACC  ')
+          COMMAREA(CREACC_COMMAREA)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2)
+          SYNCONRETURN ;
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       ABNDINFO_REC   = '';
+       ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+       ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+       EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+       ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+       ABND_TRANID     = EIBTRNID;
+       CALL POPULATE_TIME_DATE;
+       ABND_DATE  = WS_ORIG_DATE;
+       ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                    SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                    SUBSTR(WS_TIME_NOW,5,2);
+       ABND_UTIME_KEY = WS_U_TIME;
+       ABND_CODE      = 'HBNK';
+       EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+       ABND_SQLCODE  = '0';
+       ABND_FREEFORM =
+         'CAD010 - LINK CREACC FAILED' ||
+         ' EIBRESP=' || ABND_RESPCODE ||
+         ' RESP2='   || ABND_RESP2CODE;
+       WS_CA_LEN = SIZE(ABNDINFO_REC);
+       EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                      COMMAREA(ABNDINFO_REC)
+                      LENGTH(WS_CA_LEN) ;
+       WS_CICS_FAIL_MSG =
+         'BNK1CAC - CAD010 - LINK CREACC FAILED    ';
+       WS_CICS_RESP_DISP  = SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+       WS_CICS_RESP2_DISP = SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+       CALL ABEND_THIS_TASK;
+     END;
+
+     IF COMM_SUCCESS = 'N' THEN DO;
+       VALID_DATA_SW = 'N';
+       SELECT (COMM_FAIL_CODE);
+         WHEN ('1')
+           MESSAGEO =
+             'The supplied customer number does not exist.';
+         WHEN ('2')
+           MESSAGEO =
+             'The customer data cannot be accessed, ' ||
+             ' unable to create account.';
+         WHEN ('3')
+           MESSAGEO =
+             'Account record creation failed.' ||
+             ' (unable to ENQ ACCOUNT NC).';
+         WHEN ('4')
+           MESSAGEO =
+             'Account record creation failed,' ||
+             ' (unable to increment ACCOUNT NC).';
+         WHEN ('5')
+           MESSAGEO =
+             'Account record creation failed,' ||
+             ' (unable to restore ACCOUNT NC).';
+         WHEN ('6')
+           MESSAGEO =
+             'Account record creation failed,' ||
+             ' (unable to WRITE to ACCOUNT file).';
+         WHEN ('7')
+           MESSAGEO =
+             'Account record creation failed,' ||
+             ' (unable to INSERT into ACCOUNT).';
+         WHEN ('8')
+           MESSAGEO =
+             'Account record creation failed,' ||
+             ' (too many accounts).';
+         WHEN ('9')
+           MESSAGEO =
+             'Account record creation failed, ' ||
+             ' unable to count accounts.';
+         WHEN ('A')
+           MESSAGEO =
+             'Account record creation failed, ' ||
+             ' account type unsupported.';
+         OTHERWISE
+           MESSAGEO = 'The account was not created.';
+       END; /* SELECT */
+     END;
+     ELSE DO;
+       /* Account created successfully */
+       MESSAGEO =
+         'The Account has been successfully created';
+       SRTCDO  = COMM_SORTCODE;
+       ACCNOO  = COMM_NUMBER;
+       OPENDDO = SUBSTR(CHAR(COMM_OPENED,8),1,2);
+       OPENMMO = SUBSTR(CHAR(COMM_OPENED,8),3,2);
+       OPENYYO = SUBSTR(CHAR(COMM_OPENED,8),5,4);
+       NSTMTDDO = SUBSTR(CHAR(COMM_NEXT_STMT_DT,8),1,2);
+       NSTMTMMO = SUBSTR(CHAR(COMM_NEXT_STMT_DT,8),3,2);
+       NSTMTYYO = SUBSTR(CHAR(COMM_NEXT_STMT_DT,8),5,4);
+       LSTMDDO  = SUBSTR(CHAR(COMM_LAST_STMT_DT,8),1,2);
+       LSTMMMO  = SUBSTR(CHAR(COMM_LAST_STMT_DT,8),3,2);
+       LSTMYYO  = SUBSTR(CHAR(COMM_LAST_STMT_DT,8),5,4);
+       /* Format available balance */
+       BEGIN;
+         DCL AV_SIGN CHAR(1) INIT('+');
+         DCL AV_ABS  FIXED DEC(12,2);
+         IF COMM_AVAIL_BAL < 0 THEN DO;
+           AV_SIGN = '-';
+           AV_ABS  = -COMM_AVAIL_BAL;
+         END;
+         ELSE AV_ABS = COMM_AVAIL_BAL;
+         AVAILO = AV_SIGN ||
+           SUBSTR(CHAR(TRUNC(AV_ABS)),1,10) || '.' ||
+           SUBSTR(CHAR(MOD(TRUNC(AV_ABS*100),100)),1,2);
+       END;
+       /* Format actual balance */
+       BEGIN;
+         DCL AC_SIGN CHAR(1) INIT('+');
+         DCL AC_ABS  FIXED DEC(12,2);
+         IF COMM_ACT_BAL < 0 THEN DO;
+           AC_SIGN = '-';
+           AC_ABS  = -COMM_ACT_BAL;
+         END;
+         ELSE AC_ABS = COMM_ACT_BAL;
+         ACTBALO = AC_SIGN ||
+           SUBSTR(CHAR(TRUNC(AC_ABS)),1,10) || '.' ||
+           SUBSTR(CHAR(MOD(TRUNC(AC_ABS*100),100)),1,2);
+       END;
+     END;
+
+     CUSTNOO  = COMM_CUSTNO;
+     ACCTYPO  = COMM_ACC_TYPE;
+     BEGIN;
+       DCL INTRT_NUM FIXED DEC(6,2);
+       INTRT_NUM = COMM_INT_RT;
+       INTRTO = CHAR(INTRT_NUM,7);
+     END;
+     OVERDRO  = CHAR(COMM_OVERDR_LIM,8);
+
+   END CRE_ACC_DATA;
+
+   /* =============================================================== */
+   /*  SEND_MAP - SM010                                               */
+   /* =============================================================== */
+   SEND_MAP: PROCEDURE;
+
+     DCL SM_DONE LABEL;
+
+     IF SEND_FLAG = SEND_ERASE_C THEN DO;
+       EXEC CICS SEND
+            MAP('BNK1CA')
+            MAPSET('BNK1CAM')
+            FROM(BNK1CAO)
+            ERASE
+            CURSOR
+            FREEKB
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         ABNDINFO_REC   = '';
+         ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+         ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+         EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+         ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+         ABND_TRANID     = EIBTRNID;
+         CALL POPULATE_TIME_DATE;
+         ABND_DATE  = WS_ORIG_DATE;
+         ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                      SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                      SUBSTR(WS_TIME_NOW,5,2);
+         ABND_UTIME_KEY = WS_U_TIME;
+         ABND_CODE      = 'HBNK';
+         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+         ABND_SQLCODE  = '0';
+         ABND_FREEFORM =
+           'SM010 - SEND MAP ERASE FAIL.' ||
+           ' EIBRESP=' || ABND_RESPCODE ||
+           ' RESP2='   || ABND_RESP2CODE;
+         WS_CA_LEN = SIZE(ABNDINFO_REC);
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                        COMMAREA(ABNDINFO_REC)
+                        LENGTH(WS_CA_LEN) ;
+         WS_CICS_FAIL_MSG =
+           'BNK1CAC - SM010 - SEND MAP ERASE FAIL  ';
+         WS_CICS_RESP_DISP  =
+           SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+         WS_CICS_RESP2_DISP =
+           SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+         CALL ABEND_THIS_TASK;
+       END;
+       GOTO SM_DONE;
+     END;
+
+     IF SEND_FLAG = SEND_DATAONLY_C THEN DO;
+       EXEC CICS SEND
+            MAP('BNK1CA')
+            MAPSET('BNK1CAM')
+            FROM(BNK1CAO)
+            DATAONLY
+            CURSOR
+            FREEKB
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         ABNDINFO_REC   = '';
+         ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+         ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+         EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+         ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+         ABND_TRANID     = EIBTRNID;
+         CALL POPULATE_TIME_DATE;
+         ABND_DATE  = WS_ORIG_DATE;
+         ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                      SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                      SUBSTR(WS_TIME_NOW,5,2);
+         ABND_UTIME_KEY = WS_U_TIME;
+         ABND_CODE      = 'HBNK';
+         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+         ABND_SQLCODE  = '0';
+         ABND_FREEFORM =
+           'SM010 - SEND MAP DATAONLY FAIL.' ||
+           ' EIBRESP=' || ABND_RESPCODE ||
+           ' RESP2='   || ABND_RESP2CODE;
+         WS_CA_LEN = SIZE(ABNDINFO_REC);
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                        COMMAREA(ABNDINFO_REC)
+                        LENGTH(WS_CA_LEN) ;
+         WS_CICS_FAIL_MSG =
+           'BNK1CAC - SM010 - SEND MAP DATAONLY FAIL';
+         WS_CICS_RESP_DISP  =
+           SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+         WS_CICS_RESP2_DISP =
+           SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+         CALL ABEND_THIS_TASK;
+       END;
+       GOTO SM_DONE;
+     END;
+
+     IF SEND_FLAG = SEND_DATAONLY_ALARM_C THEN DO;
+       EXEC CICS SEND
+            MAP('BNK1CA')
+            MAPSET('BNK1CAM')
+            FROM(BNK1CAO)
+            DATAONLY
+            ALARM
+            CURSOR
+            FREEKB
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         ABNDINFO_REC   = '';
+         ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+         ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+         EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+         ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+         ABND_TRANID     = EIBTRNID;
+         CALL POPULATE_TIME_DATE;
+         ABND_DATE  = WS_ORIG_DATE;
+         ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                      SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                      SUBSTR(WS_TIME_NOW,5,2);
+         ABND_UTIME_KEY = WS_U_TIME;
+         ABND_CODE      = 'HBNK';
+         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+         ABND_SQLCODE  = '0';
+         ABND_FREEFORM =
+           'SM010 - SEND MAP DATAONLY ALARM FAIL.' ||
+           ' EIBRESP=' || ABND_RESPCODE ||
+           ' RESP2='   || ABND_RESP2CODE;
+         WS_CA_LEN = SIZE(ABNDINFO_REC);
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                        COMMAREA(ABNDINFO_REC)
+                        LENGTH(WS_CA_LEN) ;
+         WS_CICS_FAIL_MSG =
+           'BNK1CAC - SM010 - SEND MAP ALARM FAIL  ';
+         WS_CICS_RESP_DISP  =
+           SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+         WS_CICS_RESP2_DISP =
+           SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+         CALL ABEND_THIS_TASK;
+       END;
+     END;
+
+     SM_DONE: ;
+
+   END SEND_MAP;
+
+   /* =============================================================== */
+   /*  SEND_TERMINATION_MSG - STM010                                  */
+   /* =============================================================== */
+   SEND_TERMINATION_MSG: PROCEDURE;
+
+     EXEC CICS SEND TEXT
+          FROM(END_OF_SESSION_MESSAGE)
+          ERASE
+          FREEKB
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       ABNDINFO_REC   = '';
+       ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+       ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+       EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+       ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+       ABND_TRANID     = EIBTRNID;
+       CALL POPULATE_TIME_DATE;
+       ABND_DATE  = WS_ORIG_DATE;
+       ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                    SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                    SUBSTR(WS_TIME_NOW,5,2);
+       ABND_UTIME_KEY = WS_U_TIME;
+       ABND_CODE      = 'HBNK';
+       EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+       ABND_SQLCODE  = '0';
+       ABND_FREEFORM =
+         'STM010 - SEND TEXT FAIL.' ||
+         ' EIBRESP=' || ABND_RESPCODE ||
+         ' RESP2='   || ABND_RESP2CODE;
+       WS_CA_LEN = SIZE(ABNDINFO_REC);
+       EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                      COMMAREA(ABNDINFO_REC)
+                      LENGTH(WS_CA_LEN) ;
+       WS_CICS_FAIL_MSG =
+         'BNK1CAC - STM010 - SEND TEXT FAIL       ';
+       WS_CICS_RESP_DISP  = SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+       WS_CICS_RESP2_DISP = SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+       CALL ABEND_THIS_TASK;
+     END;
+
+   END SEND_TERMINATION_MSG;
+
+   /* =============================================================== */
+   /*  ABEND_THIS_TASK - ATT010                                       */
+   /* =============================================================== */
+   ABEND_THIS_TASK: PROCEDURE;
+
+     PUT SKIP LIST(WS_FAIL_INFO);
+     EXEC CICS ABEND
+          ABCODE('HBNK')
+          NODUMP ;
+
+   END ABEND_THIS_TASK;
+
+   /* =============================================================== */
+   /*  POPULATE_TIME_DATE - PTD010                                    */
+   /* =============================================================== */
+   POPULATE_TIME_DATE: PROCEDURE;
+
+     EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+
+     EXEC CICS FORMATTIME
+          ABSTIME(WS_U_TIME)
+          DDMMYYYY(WS_ORIG_DATE)
+          TIME(WS_TIME_NOW)
+          DATESEP ;
+
+   END POPULATE_TIME_DATE;
+
+   /* =============================================================== */
+   /*  ABEND_HANDLING - CICS abend handler label                      */
+   /* =============================================================== */
+   ABEND_HANDLING:
+     EXEC CICS ABEND ABCODE('HBNK') NODUMP ;
+
+ END BNK1CAC;

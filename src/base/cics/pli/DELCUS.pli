@@ -1,0 +1,564 @@
+ *PROCESS CICS,SQL;
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                         */
+ /* ----------------------------------------------------------------- */
+ /*  DELCUS - Delete Customer                                         */
+ /*                                                                   */
+ /*  Links to INQCUST to confirm the customer exists, links to        */
+ /*  INQACCCU to get the customer's accounts, links to DELACC for     */
+ /*  each account, then deletes the CUSTOMER row and writes a         */
+ /*  PROCTRAN record.                                                 */
+ /* ----------------------------------------------------------------- */
+ DELCUS: PROCEDURE OPTIONS(MAIN REENTRANT);
+
+   /* ----------------------------------------------------------------*/
+   /*  SQLCA                                                          */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL INCLUDE SQLCA;
+
+   /* ----------------------------------------------------------------*/
+   /*  CUSTOMER table declaration                                     */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL DECLARE CUSTOMER TABLE
+     ( CUSTOMER_EYECATCHER          CHAR(4),
+       CUSTOMER_SORTCODE            CHAR(6)   NOT NULL,
+       CUSTOMER_NUMBER              CHAR(10)  NOT NULL,
+       CUSTOMER_TITLE               CHAR(10),
+       CUSTOMER_FIRST_NAME          CHAR(50),
+       CUSTOMER_LAST_NAME           CHAR(50),
+       CUSTOMER_DATE_OF_BIRTH       INTEGER,
+       CUSTOMER_PHONE               CHAR(20),
+       CUSTOMER_ADDR_LINE1          CHAR(50),
+       CUSTOMER_ADDR_LINE2          CHAR(50),
+       CUSTOMER_CITY                CHAR(50),
+       CUSTOMER_POSTCODE            CHAR(10),
+       CUSTOMER_COUNTRY             CHAR(50),
+       CUSTOMER_STATUS              CHAR(10),
+       CUSTOMER_CREATED_DATE        INTEGER,
+       CUSTOMER_CREDIT_SCORE        SMALLINT,
+       CUSTOMER_CS_REVIEW_DATE      INTEGER );
+
+   /* ----------------------------------------------------------------*/
+   /*  PROCTRAN table declaration                                     */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL DECLARE PROCTRAN TABLE
+     ( PROCTRAN_EYECATCHER   CHAR(4),
+       PROCTRAN_SORTCODE     CHAR(6)       NOT NULL,
+       PROCTRAN_NUMBER       CHAR(8)       NOT NULL,
+       PROCTRAN_DATE         CHAR(10),
+       PROCTRAN_TIME         CHAR(6),
+       PROCTRAN_REF          CHAR(12),
+       PROCTRAN_TYPE         CHAR(3),
+       PROCTRAN_DESC         CHAR(40),
+       PROCTRAN_AMOUNT       DECIMAL(10,2) );
+
+   /* ----------------------------------------------------------------*/
+   /*  Sort code                                                      */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE SORTCODE;
+
+   /* ----------------------------------------------------------------*/
+   /*  DB2 host variables - CUSTOMER                                  */
+   /* ----------------------------------------------------------------*/
+   DCL HV_CUSTOMER_EYECATCHER      CHAR(4);
+   DCL HV_CUSTOMER_SORTCODE        CHAR(6);
+   DCL HV_CUSTOMER_NUMBER          CHAR(10);
+   DCL HV_CUSTOMER_TITLE           CHAR(10);
+   DCL HV_CUSTOMER_FIRST_NAME      CHAR(50);
+   DCL HV_CUSTOMER_LAST_NAME       CHAR(50);
+   DCL HV_CUSTOMER_DOB             FIXED BIN(31);
+   DCL HV_CUSTOMER_PHONE           CHAR(20);
+   DCL HV_CUSTOMER_ADDR_LINE1      CHAR(50);
+   DCL HV_CUSTOMER_ADDR_LINE2      CHAR(50);
+   DCL HV_CUSTOMER_CITY            CHAR(50);
+   DCL HV_CUSTOMER_POSTCODE        CHAR(10);
+   DCL HV_CUSTOMER_COUNTRY         CHAR(50);
+   DCL HV_CUSTOMER_STATUS          CHAR(10);
+   DCL HV_CUSTOMER_CREATE_DATE     FIXED BIN(31);
+   DCL HV_CUSTOMER_CREDIT_SCORE    FIXED BIN(15);
+   DCL HV_CUSTOMER_CS_REVIEW_DATE  FIXED BIN(31);
+
+   /* ----------------------------------------------------------------*/
+   /*  DB2 host variables - PROCTRAN                                  */
+   /* ----------------------------------------------------------------*/
+   DCL HV_PROCTRAN_EYECATCHER     CHAR(4);
+   DCL HV_PROCTRAN_SORT_CODE      CHAR(6);
+   DCL HV_PROCTRAN_ACC_NUMBER     CHAR(8);
+   DCL HV_PROCTRAN_DATE           CHAR(10);
+   DCL HV_PROCTRAN_TIME           CHAR(6);
+   DCL HV_PROCTRAN_REF            CHAR(12);
+   DCL HV_PROCTRAN_TYPE           CHAR(3);
+   DCL HV_PROCTRAN_DESC           CHAR(40);
+   DCL HV_PROCTRAN_AMOUNT         FIXED DEC(12,2);
+
+   /* ----------------------------------------------------------------*/
+   /*  CICS response codes                                            */
+   /* ----------------------------------------------------------------*/
+   DCL WS_CICS_RESP               FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2              FIXED BIN(31) INIT(0);
+
+   /* ----------------------------------------------------------------*/
+   /*  Work area for date formatted as DD.MM.YYYY                     */
+   /* ----------------------------------------------------------------*/
+   DCL 1 WS_ORIG_DATE_GRP_X,
+         2 WS_ORIG_DATE_DD_X        CHAR(2),
+         2 WS_ORIG_DATE_SEP1_X      CHAR(1) INIT('.'),
+         2 WS_ORIG_DATE_MM_X        CHAR(2),
+         2 WS_ORIG_DATE_SEP2_X      CHAR(1) INIT('.'),
+         2 WS_ORIG_DATE_YYYY_X      CHAR(4);
+
+   /* ----------------------------------------------------------------*/
+   /*  Stored customer snapshot for PROCTRAN                          */
+   /* ----------------------------------------------------------------*/
+   DCL 1 WS_STOREDC,
+         2 WS_STOREDC_EYECATCHER   CHAR(4),
+         2 WS_STOREDC_SORTCODE     CHAR(6),
+         2 WS_STOREDC_NUMBER       CHAR(10),
+         2 WS_STOREDC_NAME         CHAR(60),
+         2 WS_STOREDC_ADDRESS      CHAR(160),
+         2 WS_STOREDC_DATE_OF_BIRTH CHAR(10),
+         2 WS_STOREDC_CREDIT_SCORE FIXED BIN(15),
+         2 WS_STOREDC_CS_REVIEW_DATE CHAR(10);
+
+   /* ----------------------------------------------------------------*/
+   /*  Key for abend messages                                         */
+   /* ----------------------------------------------------------------*/
+   DCL 1 DESIRED_KEY,
+         2 DESIRED_KEY_SORTCODE    CHAR(6),
+         2 DESIRED_KEY_CUSTOMER    CHAR(10);
+
+   /* ----------------------------------------------------------------*/
+   /*  Miscellaneous work variables                                   */
+   /* ----------------------------------------------------------------*/
+   DCL SQLCODE_DISPLAY             FIXED BIN(31);
+   DCL WS_EIBTASKN12               FIXED DEC(12,0) INIT(0);
+   DCL WS_U_TIME                   FIXED DEC(15,0) INIT(0);
+   DCL WS_ORIG_DATE                CHAR(10);
+   DCL WS_TIME_NOW                 CHAR(6);
+   DCL WS_ABEND_PGM                CHAR(8) INIT('ABNDPROC');
+   DCL MY_ABEND_CODE               CHAR(4);
+   DCL WS_CA_LEN                   FIXED BIN(15);
+   DCL WS_INDEX                    FIXED BIN(31) INIT(1);
+
+   /* DOB parts */
+   DCL DOB_YEAR                    FIXED BIN(31);
+   DCL DOB_MONTH                   FIXED BIN(31);
+   DCL DOB_DAY                     FIXED BIN(31);
+
+   /* CS review date parts */
+   DCL CS_YEAR                     FIXED BIN(31);
+   DCL CS_MONTH                    FIXED BIN(31);
+   DCL CS_DAY                      FIXED BIN(31);
+
+   /* ----------------------------------------------------------------*/
+   /*  Abend info record                                              */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE ABNDINFO;
+
+   /* ----------------------------------------------------------------*/
+   /*  INQACCCU commarea (get accounts for customer)                  */
+   /* ----------------------------------------------------------------*/
+   DCL INQACCCU_PGM                CHAR(8) INIT('INQACCCU');
+   %INCLUDE INQACCCU;
+
+   /* ----------------------------------------------------------------*/
+   /*  INQCUST commarea                                               */
+   /* ----------------------------------------------------------------*/
+   DCL INQCUST_PGM                 CHAR(8) INIT('INQCUST ');
+   %INCLUDE INQCUSTZ;
+
+   /* ----------------------------------------------------------------*/
+   /*  DELACC commarea (for linking to DELACC per account)            */
+   /* ----------------------------------------------------------------*/
+   DCL 1 DELACC_COMM_WORK,
+         2 DELACC_COMM_EYE         CHAR(4),
+         2 DELACC_COMM_CUSTNO      CHAR(10),
+         2 DELACC_COMM_SCODE       CHAR(6),
+         2 DELACC_COMM_ACCNO       CHAR(8),
+         2 DELACC_COMM_ACC_TYPE    CHAR(8),
+         2 DELACC_COMM_INT_RATE    FIXED DEC(6,2),
+         2 DELACC_COMM_OPENED      FIXED DEC(8,0),
+         2 DELACC_COMM_OVERDRAFT   FIXED DEC(8,0),
+         2 DELACC_COMM_LAST_STMT_DT FIXED DEC(8,0),
+         2 DELACC_COMM_NEXT_STMT_DT FIXED DEC(8,0),
+         2 DELACC_COMM_AVAIL_BAL   FIXED DEC(12,2),
+         2 DELACC_COMM_ACTUAL_BAL  FIXED DEC(12,2),
+         2 DELACC_COMM_SUCCESS     CHAR(1),
+         2 DELACC_COMM_FAIL_CD     CHAR(1),
+         2 DELACC_COMM_DEL_SUCCESS CHAR(1),
+         2 DELACC_COMM_DEL_FAIL_CD CHAR(1),
+         2 DELACC_COMM_APPLID      CHAR(8);
+
+   DCL DELACC_PGM                  CHAR(8) INIT('DELACC  ');
+   DCL DELACC_CA_LEN               FIXED BIN(15);
+
+   /* ----------------------------------------------------------------*/
+   /*  COMMAREA                                                       */
+   /* ----------------------------------------------------------------*/
+   DCL COMMAREA_PTR                POINTER;
+   %INCLUDE DELCUS;
+   DCL 1 DFHCOMMAREA BASED(COMMAREA_PTR) LIKE DELCUS_COMMAREA;
+
+   /* ================================================================*/
+   /*  MAIN PROCEDURE LOGIC                                           */
+   /* ================================================================*/
+
+   /* Get the COMMAREA address */
+   EXEC CICS ADDRESS
+        COMMAREA(COMMAREA_PTR)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   DESIRED_KEY_SORTCODE  = SORTCODE;
+   DESIRED_KEY_CUSTOMER  = COMM_CUSTNO;
+
+   /* Link to INQCUST to verify customer exists */
+   INQCUST_COMMAREA = '';
+   INQCUST_CUSTNO   = COMM_CUSTNO;
+
+   EXEC CICS LINK PROGRAM(INQCUST_PGM)
+                  COMMAREA(INQCUST_COMMAREA)
+                  RESP(WS_CICS_RESP)
+                  RESP2(WS_CICS_RESP2) ;
+
+   IF INQCUST_INQ_SUCCESS = 'N' THEN DO;
+     COMM_DEL_SUCCESS = 'N';
+     COMM_DEL_FAIL_CD = INQCUST_INQ_FAIL_CD;
+     EXEC CICS RETURN ;
+   END;
+
+   /* Get all accounts for this customer */
+   CALL GET_ACCOUNTS;
+
+   IF NUMBER_OF_ACCOUNTS > 0 THEN
+     CALL DELETE_ACCOUNTS;
+
+   /* Delete the customer record from DB2 */
+   CALL DEL_CUST_DB2;
+
+   COMM_DEL_SUCCESS = 'Y';
+   COMM_DEL_FAIL_CD = ' ';
+
+   CALL GET_ME_OUT_OF_HERE;
+
+ /* ------------------------------------------------------------------*/
+ /*  GET_ACCOUNTS - Link to INQACCCU to get accounts for customer     */
+ /* ------------------------------------------------------------------*/
+ GET_ACCOUNTS: PROCEDURE;
+
+   INQACCCU_COMMAREA       = '';
+   CUSTOMER_NUMBER_CA      = COMM_CUSTNO;
+   NUMBER_OF_ACCOUNTS      = 20;
+
+   EXEC CICS LINK PROGRAM('INQACCCU')
+                  COMMAREA(INQACCCU_COMMAREA)
+                  SYNCONRETURN
+                  RESP(WS_CICS_RESP)
+                  RESP2(WS_CICS_RESP2) ;
+
+ END GET_ACCOUNTS;
+
+ /* ------------------------------------------------------------------*/
+ /*  DELETE_ACCOUNTS - Link to DELACC for each account                */
+ /* ------------------------------------------------------------------*/
+ DELETE_ACCOUNTS: PROCEDURE;
+
+   DO WS_INDEX = 1 TO NUMBER_OF_ACCOUNTS;
+     DELACC_COMM_WORK = '';
+     DELACC_COMM_ACCNO  = COMM_ACCNO(WS_INDEX);
+     DELACC_CA_LEN = SIZE(DELACC_COMM_WORK);
+     EXEC CICS LINK PROGRAM(DELACC_PGM)
+                    COMMAREA(DELACC_COMM_WORK)
+                    LENGTH(DELACC_CA_LEN)
+                    RESP(WS_CICS_RESP)
+                    RESP2(WS_CICS_RESP2) ;
+   END;
+
+ END DELETE_ACCOUNTS;
+
+ /* ------------------------------------------------------------------*/
+ /*  DEL_CUST_DB2 - SELECT then DELETE the customer row               */
+ /* ------------------------------------------------------------------*/
+ DEL_CUST_DB2: PROCEDURE;
+
+   HV_CUSTOMER_SORTCODE = COMM_SCODE;
+   HV_CUSTOMER_NUMBER   = COMM_CUSTNO;
+
+   EXEC SQL
+     SELECT CUSTOMER_EYECATCHER,
+            CUSTOMER_SORTCODE,
+            CUSTOMER_NUMBER,
+            CUSTOMER_TITLE,
+            CUSTOMER_FIRST_NAME,
+            CUSTOMER_LAST_NAME,
+            CUSTOMER_DATE_OF_BIRTH,
+            CUSTOMER_PHONE,
+            CUSTOMER_ADDR_LINE1,
+            CUSTOMER_ADDR_LINE2,
+            CUSTOMER_CITY,
+            CUSTOMER_POSTCODE,
+            CUSTOMER_COUNTRY,
+            CUSTOMER_STATUS,
+            CUSTOMER_CREATED_DATE,
+            CUSTOMER_CREDIT_SCORE,
+            CUSTOMER_CS_REVIEW_DATE
+     INTO  :HV_CUSTOMER_EYECATCHER,
+           :HV_CUSTOMER_SORTCODE,
+           :HV_CUSTOMER_NUMBER,
+           :HV_CUSTOMER_TITLE,
+           :HV_CUSTOMER_FIRST_NAME,
+           :HV_CUSTOMER_LAST_NAME,
+           :HV_CUSTOMER_DOB,
+           :HV_CUSTOMER_PHONE,
+           :HV_CUSTOMER_ADDR_LINE1,
+           :HV_CUSTOMER_ADDR_LINE2,
+           :HV_CUSTOMER_CITY,
+           :HV_CUSTOMER_POSTCODE,
+           :HV_CUSTOMER_COUNTRY,
+           :HV_CUSTOMER_STATUS,
+           :HV_CUSTOMER_CREATE_DATE,
+           :HV_CUSTOMER_CREDIT_SCORE,
+           :HV_CUSTOMER_CS_REVIEW_DATE
+     FROM CUSTOMER
+     WHERE CUSTOMER_SORTCODE = :HV_CUSTOMER_SORTCODE
+       AND CUSTOMER_NUMBER   = :HV_CUSTOMER_NUMBER ;
+
+   IF SQLCODE = 100 THEN RETURN; /* Already deleted - nothing to do */
+
+   IF SQLCODE ^= 0 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+     ABNDINFO_REC = '';
+     ABND_SQLCODE   = SUBSTR(CHAR(SQLCODE_DISPLAY), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE  = WS_ORIG_DATE;
+     ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE      = 'WPV6';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_FREEFORM = 'DCD010 - Unable to SELECT CUSTOMER from DB2 ' ||
+                     'for key:' || DESIRED_KEY_SORTCODE ||
+                     DESIRED_KEY_CUSTOMER ||
+                     ' SQLCODE=' || SUBSTR(CHAR(SQLCODE_DISPLAY),1,10);
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     EXEC CICS ABEND ABCODE('WPV6') ;
+   END;
+
+   /* Store customer details for PROCTRAN and COMMAREA */
+   WS_STOREDC_EYECATCHER = HV_CUSTOMER_EYECATCHER;
+   WS_STOREDC_SORTCODE   = BIN(HV_CUSTOMER_SORTCODE,15);
+   WS_STOREDC_NUMBER     = BIN(HV_CUSTOMER_NUMBER,31);
+   WS_STOREDC_NAME       = HV_CUSTOMER_FIRST_NAME || ' ' ||
+                           HV_CUSTOMER_LAST_NAME;
+   WS_STOREDC_ADDRESS    = HV_CUSTOMER_ADDR_LINE1 || ', ' ||
+                           HV_CUSTOMER_CITY || ', ' ||
+                           HV_CUSTOMER_POSTCODE;
+
+   COMM_EYE        = HV_CUSTOMER_EYECATCHER;
+   COMM_SCODE      = HV_CUSTOMER_SORTCODE;
+   COMM_CUSTNO     = HV_CUSTOMER_NUMBER;
+   COMM_TITLE      = HV_CUSTOMER_TITLE;
+   COMM_FIRST_NAME = HV_CUSTOMER_FIRST_NAME;
+   COMM_LAST_NAME  = HV_CUSTOMER_LAST_NAME;
+   COMM_PHONE      = HV_CUSTOMER_PHONE;
+   COMM_ADDR_LINE1 = HV_CUSTOMER_ADDR_LINE1;
+   COMM_ADDR_LINE2 = HV_CUSTOMER_ADDR_LINE2;
+   COMM_CITY       = HV_CUSTOMER_CITY;
+   COMM_POSTCODE   = HV_CUSTOMER_POSTCODE;
+   COMM_COUNTRY    = HV_CUSTOMER_COUNTRY;
+   COMM_STATUS     = HV_CUSTOMER_STATUS;
+   COMM_CREDIT_SCORE = HV_CUSTOMER_CREDIT_SCORE;
+
+   /* Decode create date */
+ COMM_CREATED_YEAR  = SUBSTR(CHAR(HV_CUSTOMER_CREATE_DATE / 10000),1,4);
+   COMM_CREATED_MONTH =
+     SUBSTR(CHAR(MOD(HV_CUSTOMER_CREATE_DATE/100,100)),1,2);
+   COMM_CREATED_DAY   =
+     SUBSTR(CHAR(MOD(HV_CUSTOMER_CREATE_DATE,100)),1,2);
+
+   /* Decode date of birth */
+   DOB_YEAR  = HV_CUSTOMER_DOB / 10000;
+   DOB_MONTH = MOD(HV_CUSTOMER_DOB / 100, 100);
+   DOB_DAY   = MOD(HV_CUSTOMER_DOB, 100);
+   COMM_DOB_DAY   = SUBSTR(CHAR(DOB_DAY),  1, 2);
+   COMM_DOB_MONTH = SUBSTR(CHAR(DOB_MONTH),1, 2);
+   COMM_DOB_YEAR  = SUBSTR(CHAR(DOB_YEAR), 1, 4);
+   WS_STOREDC_DATE_OF_BIRTH =
+     SUBSTR(CHAR(DOB_DAY),1,2) || '/' ||
+     SUBSTR(CHAR(DOB_MONTH),1,2) || '/' ||
+     SUBSTR(CHAR(DOB_YEAR),1,4);
+
+   /* Decode CS review date */
+   CS_YEAR  = HV_CUSTOMER_CS_REVIEW_DATE / 10000;
+   CS_MONTH = MOD(HV_CUSTOMER_CS_REVIEW_DATE / 100, 100);
+   CS_DAY   = MOD(HV_CUSTOMER_CS_REVIEW_DATE, 100);
+   COMM_CS_REVIEW_DAY   = SUBSTR(CHAR(CS_DAY),  1, 2);
+   COMM_CS_REVIEW_MONTH = SUBSTR(CHAR(CS_MONTH),1, 2);
+   COMM_CS_REVIEW_YEAR  = SUBSTR(CHAR(CS_YEAR), 1, 4);
+
+   /* Now delete the customer from DB2 */
+   EXEC SQL
+     DELETE FROM CUSTOMER
+     WHERE CUSTOMER_SORTCODE = :HV_CUSTOMER_SORTCODE
+       AND CUSTOMER_NUMBER   = :HV_CUSTOMER_NUMBER ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+     ABNDINFO_REC = '';
+     ABND_SQLCODE   = SUBSTR(CHAR(SQLCODE_DISPLAY), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE  = WS_ORIG_DATE;
+     ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE      = 'WPV7';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+    ABND_FREEFORM = 'DCD010(2) - Unable to DELETE CUSTOMER from DB2 ' ||
+                     'for key:' || DESIRED_KEY_SORTCODE ||
+                     DESIRED_KEY_CUSTOMER ||
+                     ' SQLCODE=' || SUBSTR(CHAR(SQLCODE_DISPLAY),1,10);
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     EXEC CICS ABEND ABCODE('WPV7') ;
+   END;
+
+   /* Write PROCTRAN record */
+   CALL WRITE_PROCTRAN_CUST;
+
+ END DEL_CUST_DB2;
+
+ /* ------------------------------------------------------------------*/
+ /* WRITE_PROCTRAN_CUST - Write PROCTRAN record for customer deletion */
+ /* ------------------------------------------------------------------*/
+ WRITE_PROCTRAN_CUST: PROCEDURE;
+
+   CALL WRITE_PROCTRAN_CUST_DB2;
+
+ END WRITE_PROCTRAN_CUST;
+
+ /* ------------------------------------------------------------------*/
+ /*  WRITE_PROCTRAN_CUST_DB2 - INSERT into PROCTRAN                   */
+ /* ------------------------------------------------------------------*/
+ WRITE_PROCTRAN_CUST_DB2: PROCEDURE;
+
+   HV_PROCTRAN_EYECATCHER = 'PRTR';
+   HV_PROCTRAN_SORT_CODE  = HV_CUSTOMER_SORTCODE;
+   HV_PROCTRAN_ACC_NUMBER = '00000000';
+   WS_EIBTASKN12          = EIBTASKN;
+   HV_PROCTRAN_REF        = SUBSTR(CHAR(WS_EIBTASKN12),1,12);
+
+   EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+
+   EXEC CICS FORMATTIME
+        ABSTIME(WS_U_TIME)
+        DDMMYYYY(WS_ORIG_DATE)
+        TIME(HV_PROCTRAN_TIME)
+        DATESEP('.') ;
+
+   WS_ORIG_DATE_DD_X   = SUBSTR(WS_ORIG_DATE,1,2);
+   WS_ORIG_DATE_MM_X   = SUBSTR(WS_ORIG_DATE,4,2);
+   WS_ORIG_DATE_YYYY_X = SUBSTR(WS_ORIG_DATE,7,4);
+   HV_PROCTRAN_DATE = WS_ORIG_DATE_DD_X || '.' ||
+                      WS_ORIG_DATE_MM_X || '.' ||
+                      WS_ORIG_DATE_YYYY_X;
+
+   /* Build description inline */
+   HV_PROCTRAN_DESC = '';
+   SUBSTR(HV_PROCTRAN_DESC, 1, 6)  = HV_CUSTOMER_SORTCODE;
+   SUBSTR(HV_PROCTRAN_DESC, 7, 10) = HV_CUSTOMER_NUMBER;
+   SUBSTR(HV_PROCTRAN_DESC,17, 14) = SUBSTR(WS_STOREDC_NAME,1,14);
+   SUBSTR(HV_PROCTRAN_DESC,31, 10) = WS_STOREDC_DATE_OF_BIRTH;
+
+   HV_PROCTRAN_TYPE   = 'ODC';
+   HV_PROCTRAN_AMOUNT = 0;
+
+   EXEC SQL
+     INSERT INTO PROCTRAN
+       ( PROCTRAN_EYECATCHER,
+         PROCTRAN_SORTCODE,
+         PROCTRAN_NUMBER,
+         PROCTRAN_DATE,
+         PROCTRAN_TIME,
+         PROCTRAN_REF,
+         PROCTRAN_TYPE,
+         PROCTRAN_DESC,
+         PROCTRAN_AMOUNT )
+     VALUES
+       ( :HV_PROCTRAN_EYECATCHER,
+         :HV_PROCTRAN_SORT_CODE,
+         :HV_PROCTRAN_ACC_NUMBER,
+         :HV_PROCTRAN_DATE,
+         :HV_PROCTRAN_TIME,
+         :HV_PROCTRAN_REF,
+         :HV_PROCTRAN_TYPE,
+         :HV_PROCTRAN_DESC,
+         :HV_PROCTRAN_AMOUNT ) ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+     ABNDINFO_REC = '';
+     ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE  = WS_ORIG_DATE;
+     ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE      = 'HWPT';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE   = SUBSTR(CHAR(SQLCODE_DISPLAY), 1, 10);
+     ABND_FREEFORM  = 'WPCD010 - Unable to WRITE to PROCTRAN DB2 ' ||
+                      'datastore. EIBRESP=' ||
+                      SUBSTR(CHAR(EIBRESP), 1, 10) ||
+                      ' RESP2=' || SUBSTR(CHAR(EIBRESP2), 1, 10);
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     EXEC CICS ABEND ABCODE('HWPT') NODUMP ;
+   END;
+
+ END WRITE_PROCTRAN_CUST_DB2;
+
+ /* ------------------------------------------------------------------*/
+ /*  GET_ME_OUT_OF_HERE - Return to CICS                              */
+ /* ------------------------------------------------------------------*/
+ GET_ME_OUT_OF_HERE: PROCEDURE;
+
+   EXEC CICS RETURN ;
+
+ END GET_ME_OUT_OF_HERE;
+
+ /* ------------------------------------------------------------------*/
+ /*  POPULATE_TIME_DATE - Get current date and time via CICS          */
+ /* ------------------------------------------------------------------*/
+ POPULATE_TIME_DATE: PROCEDURE;
+
+   EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+
+   EXEC CICS FORMATTIME
+        ABSTIME(WS_U_TIME)
+        DDMMYYYY(WS_ORIG_DATE)
+        TIME(WS_TIME_NOW)
+        DATESEP ;
+
+ END POPULATE_TIME_DATE;
+
+ END DELCUS;

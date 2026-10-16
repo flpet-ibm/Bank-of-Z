@@ -1,0 +1,1334 @@
+ *PROCESS SQL;
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                         */
+ /* ----------------------------------------------------------------- */
+ /*  BANKDATA - Batch DB2 test data generator for Bank-of-Z           */
+ /*                                                                   */
+ /*  Reads PARM: start-key,end-key,step-key,random-seed               */
+ /*  Deletes existing CUSTOMER / ACCOUNT / CONTROL rows,              */
+ /*  inserts initial CONTROL records, then loops start-key to         */
+ /*  end-key by step-key generating one CUSTOMER and 1-5 ACCOUNTs    */
+ /*  per iteration.  Commits every 1000 rows.                         */
+ /*  Updates CONTROL table with last customer number and account      */
+ /*  counts.  On SQL error: displays diagnostics, sets RC=12, GOBACKs */
+ /* ----------------------------------------------------------------- */
+ BANKDATA: PROCEDURE OPTIONS(MAIN);
+
+   /* --------------------------------------------------------------- */
+   /*  SQLCA - must precede all other EXEC SQL statements             */
+   /* --------------------------------------------------------------- */
+   EXEC SQL INCLUDE SQLCA;
+
+   /* --------------------------------------------------------------- */
+   /*  DB2 table declarations                                         */
+   /* --------------------------------------------------------------- */
+   EXEC SQL INCLUDE CUSTDB2;
+   EXEC SQL INCLUDE ACCDB2;
+
+   EXEC SQL DECLARE STTESTER.CONTROL TABLE
+     ( CONTROL_NAME          CHAR(32)  NOT NULL,
+       CONTROL_VALUE_NUM     INTEGER,
+       CONTROL_VALUE_STR     CHAR(40) ) ;
+
+   /* --------------------------------------------------------------- */
+   /*  Sort code constant                                             */
+   /* --------------------------------------------------------------- */
+   %INCLUDE SORTCODE;
+
+   /* --------------------------------------------------------------- */
+   /*  DB2 host variables - CUSTOMER                                  */
+   /* --------------------------------------------------------------- */
+   DCL HV_CUSTOMER_EYECATCHER      CHAR(4);
+   DCL HV_CUSTOMER_SORTCODE        CHAR(6);
+   DCL HV_CUSTOMER_NUMBER          CHAR(10);
+   DCL HV_CUSTOMER_TITLE           CHAR(10);
+   DCL HV_CUSTOMER_FIRST_NAME      CHAR(50);
+   DCL HV_CUSTOMER_LAST_NAME       CHAR(50);
+   DCL HV_CUSTOMER_DOB             FIXED BIN(31);
+   DCL HV_CUSTOMER_PHONE           CHAR(20);
+   DCL HV_CUSTOMER_ADDR_LINE1      CHAR(50);
+   DCL HV_CUSTOMER_ADDR_LINE2      CHAR(50);
+   DCL HV_CUSTOMER_CITY            CHAR(50);
+   DCL HV_CUSTOMER_POSTCODE        CHAR(10);
+   DCL HV_CUSTOMER_COUNTRY         CHAR(50);
+   DCL HV_CUSTOMER_STATUS          CHAR(10);
+   DCL HV_CUSTOMER_CREATE_DATE     FIXED BIN(31);
+   DCL HV_CUSTOMER_CREDIT_SCORE    FIXED BIN(15);
+   DCL HV_CUSTOMER_CS_REVIEW_DATE  FIXED BIN(31);
+
+   /* --------------------------------------------------------------- */
+   /*  DB2 host variables - ACCOUNT                                   */
+   /* --------------------------------------------------------------- */
+   DCL HV_ACCOUNT_EYECATCHER       CHAR(4);
+   DCL HV_ACCOUNT_CUST_NO          CHAR(10);
+   DCL HV_ACCOUNT_SORT_CODE        CHAR(6);
+   DCL HV_ACCOUNT_NUMBER           CHAR(8);
+   DCL HV_ACCOUNT_TYPE             CHAR(8);
+   DCL HV_ACCOUNT_INTEREST_RATE    FIXED DEC(6,2);
+   DCL HV_ACCOUNT_OPENED           CHAR(10);       /* DD.MM.YYYY */
+   DCL HV_ACCOUNT_OVERDRAFT_LIMIT  FIXED BIN(31);
+   DCL HV_ACCOUNT_LAST_STMT_DATE   CHAR(10);
+   DCL HV_ACCOUNT_NEXT_STMT_DATE   CHAR(10);
+   DCL HV_ACCOUNT_AVAILABLE_BAL    FIXED DEC(12,2);
+   DCL HV_ACCOUNT_ACTUAL_BAL       FIXED DEC(12,2);
+
+   /* --------------------------------------------------------------- */
+   /*  DB2 host variables - CONTROL                                   */
+   /* --------------------------------------------------------------- */
+   DCL HV_CONTROL_NAME             CHAR(32);
+   DCL HV_CONTROL_VALUE_NUM        FIXED BIN(31);
+   DCL HV_CONTROL_VALUE_STR        CHAR(40);
+
+   /* --------------------------------------------------------------- */
+   /*  PARM input                                                     */
+   /* --------------------------------------------------------------- */
+   DCL 1 PARM_BUFFER,
+         2 PARM_LENGTH   FIXED BIN(15),
+         2 PARM          CHAR(256);
+
+   DCL PARM_STR            CHAR(256);
+   DCL PARM_LEN            FIXED BIN(15);
+
+   /* --------------------------------------------------------------- */
+   /*  Key variables                                                  */
+   /* --------------------------------------------------------------- */
+   DCL START_KEY           FIXED BIN(31) INIT(0);
+   DCL END_KEY             FIXED BIN(31) INIT(0);
+   DCL STEP_KEY            FIXED BIN(31) INIT(1);
+   DCL NEXT_KEY            FIXED BIN(31) INIT(0);
+   DCL RANDOM_SEED         FIXED BIN(31) INIT(0);
+
+   /* --------------------------------------------------------------- */
+   /*  Parm parse work areas                                          */
+   /* --------------------------------------------------------------- */
+   DCL PARM_COMMA1         FIXED BIN(15) INIT(0);
+   DCL PARM_COMMA2         FIXED BIN(15) INIT(0);
+   DCL PARM_COMMA3         FIXED BIN(15) INIT(0);
+   DCL PARM_TOKEN          CHAR(20);
+
+   /* --------------------------------------------------------------- */
+   /*  Today's date as integer (YYYYMMDD)                             */
+   /* --------------------------------------------------------------- */
+   DCL WS_TODAY_INT        FIXED BIN(31) INIT(0);
+   DCL WS_CURRENT_DATE     CHAR(8)  INIT('        ');
+   DCL WS_CURRENT_DATE9    FIXED BIN(31) INIT(0);
+
+   /* --------------------------------------------------------------- */
+   /*  Review date work areas                                         */
+   /* --------------------------------------------------------------- */
+   DCL WS_REVIEW_DATE_ADD  FIXED BIN(15) INIT(0);
+   DCL WS_NEW_REVIEW_INT   FIXED BIN(31) INIT(0);
+   DCL WS_NEW_REVIEW_CHAR  CHAR(8)  INIT('        ');
+
+   /* --------------------------------------------------------------- */
+   /*  Customer working fields                                        */
+   /* --------------------------------------------------------------- */
+   DCL CUST_NUMBER_INT     FIXED BIN(31) INIT(0);
+   DCL CUST_TITLE          CHAR(10) INIT(' ');
+   DCL CUST_FIRST_NAME     CHAR(50) INIT(' ');
+   DCL CUST_LAST_NAME      CHAR(50) INIT(' ');
+   DCL CUST_ADDR_LINE1     CHAR(50) INIT(' ');
+   DCL CUST_CITY           CHAR(50) INIT(' ');
+   DCL CUST_POSTCODE       CHAR(10) INIT(' ');
+   DCL CUST_PHONE          CHAR(20) INIT(' ');
+   DCL CUST_STATUS         CHAR(10) INIT(' ');
+   DCL CUST_DOB_DAY        FIXED BIN(15) INIT(0);
+   DCL CUST_DOB_MONTH      FIXED BIN(15) INIT(0);
+   DCL CUST_DOB_YEAR       FIXED BIN(15) INIT(0);
+   DCL CUST_DOB_INT        FIXED BIN(31) INIT(0);
+   DCL CUST_CREDIT_SCORE   FIXED BIN(15) INIT(0);
+   DCL CUST_CS_REV_YEAR    CHAR(4)  INIT('    ');
+   DCL CUST_CS_REV_MONTH   CHAR(2)  INIT('  ');
+   DCL CUST_CS_REV_DAY     CHAR(2)  INIT('  ');
+   DCL CUST_CS_REV_INT     FIXED BIN(31) INIT(0);
+   DCL CUST_CREATED_INT    FIXED BIN(31) INIT(0);
+   DCL HOUSE_NUMBER        FIXED BIN(15) INIT(0);
+   DCL WS_POSTCODE_NUM     FIXED BIN(15) INIT(0);
+
+   /* --------------------------------------------------------------- */
+   /*  Account working fields                                         */
+   /* --------------------------------------------------------------- */
+   DCL WS_ACCOUNT_NUMBER   FIXED BIN(31) INIT(1);
+   DCL NO_OF_ACCOUNTS      FIXED BIN(15) INIT(0);
+   DCL ACC_CTR             FIXED BIN(15) INIT(0);
+   DCL ACC_OPENED_DAY      FIXED BIN(15) INIT(0);
+   DCL ACC_OPENED_MONTH    FIXED BIN(15) INIT(0);
+   DCL ACC_OPENED_YEAR     FIXED BIN(15) INIT(0);
+   DCL ACC_BALANCE         FIXED DEC(12,2) INIT(0);
+   DCL OPENED_DATE_VALID   CHAR(1)  INIT('N');
+   DCL OPENED_DATE_TRIES   FIXED BIN(15) INIT(0);
+
+   /* --------------------------------------------------------------- */
+   /*  Control tracking                                               */
+   /* --------------------------------------------------------------- */
+   DCL LAST_CUSTOMER_NUMBER  FIXED BIN(31) INIT(0);
+   DCL LAST_ACCOUNT_NUMBER   FIXED BIN(31) INIT(0);
+   DCL NUMBER_OF_CUSTOMERS   FIXED BIN(31) INIT(0);
+   DCL NUMBER_OF_ACCOUNTS    FIXED BIN(31) INIT(0);
+   DCL COMMIT_COUNT          FIXED BIN(31) INIT(0);
+
+   /* --------------------------------------------------------------- */
+   /*  Miscellaneous                                                  */
+   /* --------------------------------------------------------------- */
+   DCL SQLCODE_DISPLAY       FIXED BIN(31) INIT(0);
+   DCL DISP_REASON_CODE      CHAR(18) INIT(' ');
+   DCL RETURN_CODE           FIXED BIN(31) INIT(0);
+   DCL TITLE_NUMBER          FIXED BIN(15) INIT(1);
+   DCL FORENAMES_PTR         FIXED BIN(15) INIT(1);
+   DCL INITIALS_PTR          FIXED BIN(15) INIT(1);
+   DCL SURNAMES_PTR          FIXED BIN(15) INIT(1);
+   DCL TOWN_PTR              FIXED BIN(15) INIT(1);
+   DCL STREET_T_PTR          FIXED BIN(15) INIT(1);
+   DCL STREET_R_PTR          FIXED BIN(15) INIT(1);
+   DCL ACCOUNT_TYPES_PTR     FIXED BIN(15) INIT(1);
+   DCL RAND_VAL              FLOAT(53)    INIT(0);
+   DCL I                     FIXED BIN(15) INIT(0);
+   DCL J                     FIXED BIN(15) INIT(0);
+   DCL TEMP_CHAR4            CHAR(4);
+   DCL TEMP_CHAR8            CHAR(8);
+   DCL TEMP_CHAR10           CHAR(10);
+   DCL TEMP_CHAR20           CHAR(20);
+   DCL TEMP_INT              FIXED BIN(31) INIT(0);
+
+   /* --------------------------------------------------------------- */
+   /*  Forenames array (50 entries)                                   */
+   /* --------------------------------------------------------------- */
+   DCL FORENAMES(50)    CHAR(20) INIT(
+     'Michael             ', 'Will                ',
+     'Geoff               ', 'Chris               ',
+     'Dave                ', 'Luke                ',
+     'Adam                ', 'Giuseppe            ',
+     'James               ', 'Jon                 ',
+     'Andy                ', 'Lou                 ',
+     'Robert              ', 'Sam                 ',
+     'Frederick           ', 'Buford              ',
+     'William             ', 'Howard              ',
+     'Anthony             ', 'Bruce               ',
+     'Peter               ', 'Stephen             ',
+     'Donald              ', 'Dennis              ',
+     'Harold              ', 'Amy                 ',
+     'Belinda             ', 'Charlotte           ',
+     'Donna               ', 'Felicia             ',
+     'Gretchen            ', 'Henrietta           ',
+     'Imogen              ', 'Josephine           ',
+     'Kimberley           ', 'Lucy                ',
+     'Monica              ', 'Natalie             ',
+     'Ophelia             ', 'Patricia            ',
+     'Querida             ', 'Rachel              ',
+     'Samantha            ', 'Tanya               ',
+     'Ulrika              ', 'Virginia            ',
+     'Wendy               ', 'Xaviera             ',
+     'Yvonne              ', 'Zsa Zsa             ');
+   DCL FORENAMES_CNT    FIXED BIN(15) INIT(50);
+
+   /* --------------------------------------------------------------- */
+   /*  Initials (A-Z plus 4 blanks = 30 chars, one per entry)         */
+   /* --------------------------------------------------------------- */
+   DCL INITIALS_ARR(30) CHAR(1) INIT(
+     'A','B','C','D','E','F','G','H','I','J','L','K',
+     'M','N','O','P','Q','R','S','T','U','V','W','X',
+     'Y','Z',' ',' ',' ',' ');
+   DCL INITIALS_CNT     FIXED BIN(15) INIT(30);
+
+   /* --------------------------------------------------------------- */
+   /*  Surnames array (50 entries)                                    */
+   /* --------------------------------------------------------------- */
+   DCL SURNAMES(50)     CHAR(20) INIT(
+     'Jones               ', 'Davidson            ',
+     'Baker               ', 'Smith               ',
+     'Taylor              ', 'Evans               ',
+     'Roberts             ', 'Wright              ',
+     'Walker              ', 'Green               ',
+     'Price               ', 'Downton             ',
+     'Gatting             ', 'Robinson            ',
+     'Justice             ', 'Tell                ',
+     'Stark               ', 'Strange             ',
+     'Parker              ', 'Blake               ',
+     'Jackson             ', 'Groves              ',
+     'Palmer              ', 'Lloyd               ',
+     'Hughes              ', 'Briggs              ',
+     'Higins              ', 'Goodwin             ',
+     'Valmont             ', 'Brown               ',
+     'Hopkins             ', 'Bonney              ',
+     'Jenkins             ', 'Lloyd               ',
+     'Wilmore             ', 'Franklin            ',
+     'Renton              ', 'Seward              ',
+     'Morris              ', 'Johnson             ',
+     'Brennan             ', 'Thomson             ',
+     'Barker              ', 'Corbett             ',
+     'Weber               ', 'Leigh               ',
+     'Croft               ', 'Walken              ',
+     'Dubois              ', 'Stephens            ');
+   DCL SURNAMES_CNT     FIXED BIN(15) INIT(50);
+
+   /* --------------------------------------------------------------- */
+   /*  Street trees (26 entries)                                      */
+   /* --------------------------------------------------------------- */
+   DCL STREET_TREES(26) CHAR(20) INIT(
+     'Acacia              ', 'Birch               ',
+     'Cypress             ', 'Douglas             ',
+     'Elm                 ', 'Fir                 ',
+     'Gorse               ', 'Holly               ',
+     'Ironwood            ', 'Joshua              ',
+     'Kapok               ', 'Laburnam            ',
+     'Maple               ', 'Nutmeg              ',
+     'Oak                 ', 'Pine                ',
+     'Quercine            ', 'Rowan               ',
+     'Sycamore            ', 'Thorn               ',
+     'Ulmus               ', 'Viburnum            ',
+     'Willow              ', 'Xylophone           ',
+     'Yew                 ', 'Zebratree           ');
+   DCL STREET_T_CNT     FIXED BIN(15) INIT(26);
+
+   /* --------------------------------------------------------------- */
+   /*  Street road types (19 entries)                                 */
+   /* --------------------------------------------------------------- */
+   DCL STREET_ROADS(19) CHAR(20) INIT(
+     'Avenue              ', 'Boulevard           ',
+     'Close               ', 'Crescent            ',
+     'Drive               ', 'Escalade            ',
+     'Frontage            ', 'Lane                ',
+     'Mews                ', 'Rise                ',
+     'Court               ', 'Opening             ',
+     'Loke                ', 'Square              ',
+     'Houses              ', 'Gate                ',
+     'Street              ', 'Grove               ',
+     'March               ');
+   DCL STREET_R_CNT     FIXED BIN(15) INIT(19);
+
+   /* --------------------------------------------------------------- */
+   /*  Towns (50 entries)                                             */
+   /* --------------------------------------------------------------- */
+   DCL TOWNS(50)        CHAR(20) INIT(
+     'Norwich             ', 'Acle                ',
+     'Aylsham             ', 'Wymondham           ',
+     'Attleborough        ', 'Cromer              ',
+     'Cambridge           ', 'Peterborough        ',
+     'Weobley             ', 'Wembley             ',
+     'Hereford            ', 'Ross-on-Wye         ',
+     'Hay-on-Wye          ', 'Nottingham          ',
+     'Northampton         ', 'Nuneaton            ',
+     'Oxford              ', 'Oswestry            ',
+     'Ormskirk            ', 'Royston             ',
+     'Chilcomb            ', 'Winchester          ',
+     'Wrexham             ', 'Crewe               ',
+     'Plymouth            ', 'Portsmouth          ',
+     'Forfar              ', 'Fife                ',
+     'Aberdeen            ', 'Glasgow             ',
+     'Birmingham          ', 'Bolton              ',
+     'Whitby              ', 'Manchester          ',
+     'Chester             ', 'Leicester           ',
+     'Lowestoft           ', 'Ipswich             ',
+     'Colchester          ', 'Dover               ',
+     'Brighton            ', 'Salisbury           ',
+     'Bristol             ', 'Bath                ',
+     'Gloucester          ', 'Cheltenham          ',
+     'Durham              ', 'Carlisle            ',
+     'York                ', 'Exeter              ');
+   DCL TOWN_COUNT       FIXED BIN(15) INIT(50);
+
+   /* --------------------------------------------------------------- */
+   /*  Titles (36 entries matching COBOL TITLE-ALPHABET)              */
+   /* --------------------------------------------------------------- */
+   DCL TITLE_WORDS(36)  CHAR(9) INIT(
+     'Mr       ', 'Mrs      ', 'Miss     ', 'Ms       ',
+     'Mr       ', 'Mrs      ', 'Miss     ', 'Ms       ',
+     'Mr       ', 'Mrs      ', 'Miss     ', 'Ms       ',
+     'Mr       ', 'Mrs      ', 'Miss     ', 'Ms       ',
+     'Mr       ', 'Mrs      ', 'Miss     ', 'Ms       ',
+     'Dr       ', 'Drs      ', 'Dr       ', 'Ms       ',
+     'Dr       ', 'Ms       ', 'Dr       ', 'Ms       ',
+     'Professor', 'Professor', 'Professor', 'Lord     ',
+     'Sir      ', 'Sir      ', 'Lady     ', 'Lady     ');
+
+   /* --------------------------------------------------------------- */
+   /*  Account types, interest rates, overdraft limits (5 each)       */
+   /* --------------------------------------------------------------- */
+   DCL ACC_TYPES(5)     CHAR(8) INIT(
+     'ISA     ', 'SAVING  ', 'CURRENT ', 'LOAN    ', 'MORTGAGE');
+   DCL ACC_INT_RATES(5) FIXED DEC(6,2) INIT(
+     2.10, 1.75, 0.00, 17.90, 5.25);
+   DCL ACC_OVERDRAFT(5) FIXED BIN(31) INIT(
+     0, 0, 100, 0, 0);
+   DCL ACC_TYPES_COUNT  FIXED BIN(15) INIT(5);
+
+   /* --------------------------------------------------------------- */
+   /*  PARM linkage - PROCEDURE must accept parm via SYSPARM          */
+   /*  In batch PL/I the run-time parm string is accessed via         */
+   /*  PLIRETV / PLITDLI, but on z/OS the standard approach is to     */
+   /*  use FETCH FIRST or declare a CHAR VARYING parm.                */
+   /*  We use the standard z/OS PL/I batch pattern:                   */
+   /*    DCL SYSPARM BUILTIN; ... CALL PLIRETV(rc);                   */
+   /*  Actually the correct z/OS method for reading JCL PARM= is to   */
+   /*  use FETCH or declare the PARM as a parameter.  We declare it   */
+   /*  as an external variable in the standard way.                   */
+   /* --------------------------------------------------------------- */
+   DCL PLIRETV           BUILTIN;
+   DCL PLISAXA           BUILTIN;
+
+   /* z/OS batch PARM= arrives in the SYSIN-like mechanism; the       */
+   /* standard PL/I MAIN receives it as a CHAR VARYING argument.      */
+   /* We model it like the COBOL linkage section:                     */
+   DCL 1 JCL_PARM_BUF    BASED(PARM_ADDR),
+         2 JCL_PARM_LEN  FIXED BIN(15),
+         2 JCL_PARM_DATA CHAR(256);
+   DCL PARM_ADDR         POINTER;
+   DCL PARM_INPUT        CHAR(256) INIT(' ');
+   DCL PARM_INPUT_LEN    FIXED BIN(15) INIT(0);
+
+   /* --------------------------------------------------------------- */
+   /*  Timestamp / display work area                                  */
+   /* --------------------------------------------------------------- */
+   DCL TIMESTAMP_MSG     CHAR(40) INIT(' ');
+
+   /* =============================================================== */
+   /*  MAIN PROCEDURE BODY                                            */
+   /* =============================================================== */
+
+   TIMESTAMP_MSG = 'Starting BANKDATA';
+   CALL TIMESTAMP_PROC;
+
+   /* --------------------------------------------------------------- */
+   /*  Get today's date                                               */
+   /* --------------------------------------------------------------- */
+   CALL GET_TODAYS_DATE;
+
+   /* --------------------------------------------------------------- */
+   /*  Read and parse JCL PARM                                        */
+   /* --------------------------------------------------------------- */
+   CALL PARSE_PARM;
+
+   /* --------------------------------------------------------------- */
+   /*  Validate parameters                                            */
+   /* --------------------------------------------------------------- */
+   IF END_KEY < START_KEY THEN DO;
+     DISPLAY('Final customer number cannot be smaller than '
+          || 'first customer number');
+     RETURN_CODE = 12;
+     CALL PROGRAM_DONE;
+   END;
+   IF STEP_KEY = 0 THEN DO;
+     DISPLAY('Gap between customers cannot be zero');
+     RETURN_CODE = 12;
+     CALL PROGRAM_DONE;
+   END;
+
+   /* --------------------------------------------------------------- */
+   /*  Delete existing DB2 rows                                       */
+   /* --------------------------------------------------------------- */
+   CALL DELETE_DB2_ROWS;
+
+   /* --------------------------------------------------------------- */
+   /*  Seed random number generator and advance pointers              */
+   /* --------------------------------------------------------------- */
+   RAND_VAL = RAND(RANDOM_SEED);
+   FORENAMES_PTR  = TRUNC(FORENAMES_CNT  * RAND_VAL) + 1;
+   IF FORENAMES_PTR > FORENAMES_CNT THEN FORENAMES_PTR = FORENAMES_CNT;
+
+   RAND_VAL = RAND();
+   INITIALS_PTR   = TRUNC(INITIALS_CNT   * RAND_VAL) + 1;
+   IF INITIALS_PTR > INITIALS_CNT THEN INITIALS_PTR = INITIALS_CNT;
+
+   RAND_VAL = RAND();
+   SURNAMES_PTR   = TRUNC(SURNAMES_CNT   * RAND_VAL) + 1;
+   IF SURNAMES_PTR > SURNAMES_CNT THEN SURNAMES_PTR = SURNAMES_CNT;
+
+   RAND_VAL = RAND();
+   TOWN_PTR       = TRUNC(TOWN_COUNT     * RAND_VAL) + 1;
+   IF TOWN_PTR > TOWN_COUNT THEN TOWN_PTR = TOWN_COUNT;
+
+   RAND_VAL = RAND();
+   STREET_R_PTR   = TRUNC(STREET_R_CNT  * RAND_VAL) + 1;
+   IF STREET_R_PTR > STREET_R_CNT THEN STREET_R_PTR = STREET_R_CNT;
+
+   RAND_VAL = RAND();
+   STREET_T_PTR   = TRUNC(STREET_T_CNT  * RAND_VAL) + 1;
+   IF STREET_T_PTR > STREET_T_CNT THEN STREET_T_PTR = STREET_T_CNT;
+
+   RAND_VAL = RAND();
+   ACCOUNT_TYPES_PTR = TRUNC(ACC_TYPES_COUNT * RAND_VAL) + 1;
+   IF ACCOUNT_TYPES_PTR > ACC_TYPES_COUNT
+     THEN ACCOUNT_TYPES_PTR = ACC_TYPES_COUNT;
+
+   /* --------------------------------------------------------------- */
+   /*  Initialise counters                                            */
+   /* --------------------------------------------------------------- */
+   TIMESTAMP_MSG = 'Populating Customer + Account tables';
+   CALL TIMESTAMP_PROC;
+
+   COMMIT_COUNT           = 0;
+   LAST_CUSTOMER_NUMBER   = 0;
+   NUMBER_OF_CUSTOMERS    = 0;
+   LAST_ACCOUNT_NUMBER    = 0;
+   NUMBER_OF_ACCOUNTS     = 0;
+
+   /* =============================================================== */
+   /*  MAIN GENERATION LOOP                                           */
+   /* =============================================================== */
+   NEXT_KEY = START_KEY;
+   DO WHILE (NEXT_KEY <= END_KEY);
+
+     /* ------------------------------------------------------------- */
+     /*  Generate random pointers for this customer                   */
+     /* ------------------------------------------------------------- */
+     RAND_VAL = RAND();
+     TITLE_NUMBER  = TRUNC((36 - 1) * RAND_VAL) + 1;
+     IF TITLE_NUMBER < 1 THEN TITLE_NUMBER = 1;
+     IF TITLE_NUMBER > 36 THEN TITLE_NUMBER = 36;
+
+     RAND_VAL = RAND();
+     FORENAMES_PTR = TRUNC((FORENAMES_CNT - 1) * RAND_VAL) + 1;
+     IF FORENAMES_PTR < 1 THEN FORENAMES_PTR = 1;
+    IF FORENAMES_PTR > FORENAMES_CNT THEN FORENAMES_PTR = FORENAMES_CNT;
+
+     RAND_VAL = RAND();
+     INITIALS_PTR  = TRUNC((INITIALS_CNT - 1) * RAND_VAL) + 1;
+     IF INITIALS_PTR < 1 THEN INITIALS_PTR = 1;
+     IF INITIALS_PTR > INITIALS_CNT THEN INITIALS_PTR = INITIALS_CNT;
+
+     RAND_VAL = RAND();
+     SURNAMES_PTR  = TRUNC((SURNAMES_CNT - 1) * RAND_VAL) + 1;
+     IF SURNAMES_PTR < 1 THEN SURNAMES_PTR = 1;
+     IF SURNAMES_PTR > SURNAMES_CNT THEN SURNAMES_PTR = SURNAMES_CNT;
+
+     RAND_VAL = RAND();
+     HOUSE_NUMBER  = TRUNC(99 * RAND_VAL) + 1;
+     IF HOUSE_NUMBER < 1 THEN HOUSE_NUMBER = 1;
+     IF HOUSE_NUMBER > 99 THEN HOUSE_NUMBER = 99;
+
+     RAND_VAL = RAND();
+     STREET_T_PTR  = TRUNC((STREET_T_CNT - 1) * RAND_VAL) + 1;
+     IF STREET_T_PTR < 1 THEN STREET_T_PTR = 1;
+     IF STREET_T_PTR > STREET_T_CNT THEN STREET_T_PTR = STREET_T_CNT;
+
+     RAND_VAL = RAND();
+     STREET_R_PTR  = TRUNC((STREET_R_CNT - 1) * RAND_VAL) + 1;
+     IF STREET_R_PTR < 1 THEN STREET_R_PTR = 1;
+     IF STREET_R_PTR > STREET_R_CNT THEN STREET_R_PTR = STREET_R_CNT;
+
+     RAND_VAL = RAND();
+     TOWN_PTR      = TRUNC((TOWN_COUNT - 1) * RAND_VAL) + 1;
+     IF TOWN_PTR < 1 THEN TOWN_PTR = 1;
+     IF TOWN_PTR > TOWN_COUNT THEN TOWN_PTR = TOWN_COUNT;
+
+     /* ------------------------------------------------------------- */
+     /*  Build CUSTOMER host variables                                */
+     /* ------------------------------------------------------------- */
+     CUST_NUMBER_INT = NEXT_KEY;
+     LAST_CUSTOMER_NUMBER = NEXT_KEY;
+     NUMBER_OF_CUSTOMERS = NUMBER_OF_CUSTOMERS + 1;
+
+     HV_CUSTOMER_EYECATCHER = 'CUST';
+     HV_CUSTOMER_SORTCODE   = SORTCODE;
+
+     /* Format customer number as 10-char zero-filled string          */
+     HV_CUSTOMER_NUMBER = RIGHT(TRIM(CHAR(CUST_NUMBER_INT)), 10, '0');
+
+     /* Title                                                         */
+     CUST_TITLE = TITLE_WORDS(TITLE_NUMBER);
+     HV_CUSTOMER_TITLE = CUST_TITLE;
+
+     /* First name: forename + initial                                */
+     TEMP_CHAR20 = FORENAMES(FORENAMES_PTR);
+     J = INDEX(TEMP_CHAR20, ' ');           /* find trailing blank    */
+     IF J <= 1 THEN J = LENGTH(TEMP_CHAR20);
+     ELSE J = J - 1;
+     CUST_FIRST_NAME = SUBSTR(TEMP_CHAR20, 1, J)
+                    || ' ' || INITIALS_ARR(INITIALS_PTR);
+     HV_CUSTOMER_FIRST_NAME = CUST_FIRST_NAME;
+
+     /* Last name                                                     */
+     CUST_LAST_NAME = SURNAMES(SURNAMES_PTR);
+     HV_CUSTOMER_LAST_NAME = CUST_LAST_NAME;
+
+     /* Address line 1: "NN TreeName RoadType"                        */
+     TEMP_CHAR20 = STREET_TREES(STREET_T_PTR);
+     I = INDEX(TEMP_CHAR20, ' ');
+     IF I <= 1 THEN I = LENGTH(TEMP_CHAR20); ELSE I = I - 1;
+     TEMP_CHAR4 = TRIM(CHAR(HOUSE_NUMBER));
+     CUST_ADDR_LINE1 = TRIM(TEMP_CHAR4)
+                    || ' ' || SUBSTR(TEMP_CHAR20, 1, I)
+                    || ' '
+                    || TRIM(STREET_ROADS(STREET_R_PTR));
+     HV_CUSTOMER_ADDR_LINE1 = CUST_ADDR_LINE1;
+     HV_CUSTOMER_ADDR_LINE2 = ' ';
+
+     /* City                                                          */
+     CUST_CITY = TOWNS(TOWN_PTR);
+     HV_CUSTOMER_CITY = CUST_CITY;
+
+     /* Postcode                                                      */
+     RAND_VAL = RAND();
+     WS_POSTCODE_NUM = TRUNC((99 - 10) * RAND_VAL) + 10;
+     IF WS_POSTCODE_NUM < 10 THEN WS_POSTCODE_NUM = 10;
+     IF WS_POSTCODE_NUM > 99 THEN WS_POSTCODE_NUM = 99;
+     HV_CUSTOMER_POSTCODE = 'SW' || CHAR(WS_POSTCODE_NUM) || ' 3CD';
+
+     /* Country and status                                            */
+     HV_CUSTOMER_COUNTRY = 'United Kingdom';
+     HV_CUSTOMER_STATUS  = 'ACTIVE';
+     HV_CUSTOMER_PHONE   = ' ';
+
+     /* Date of birth                                                 */
+     RAND_VAL = RAND();
+     CUST_DOB_DAY   = TRUNC((28 - 1) * RAND_VAL) + 1;
+     RAND_VAL = RAND();
+     CUST_DOB_MONTH = TRUNC((12 - 1) * RAND_VAL) + 1;
+     RAND_VAL = RAND();
+     CUST_DOB_YEAR  = TRUNC((2000 - 1900) * RAND_VAL) + 1900;
+
+     CUST_DOB_INT = (CUST_DOB_YEAR * 10000)
+                  + (CUST_DOB_MONTH * 100)
+                  + CUST_DOB_DAY;
+     HV_CUSTOMER_DOB = CUST_DOB_INT;
+
+     /* Credit score                                                  */
+     RAND_VAL = RAND();
+     CUST_CREDIT_SCORE = TRUNC((999 - 1) * RAND_VAL) + 1;
+     HV_CUSTOMER_CREDIT_SCORE = CUST_CREDIT_SCORE;
+
+     /* Credit score review date: today + 1..21 days                  */
+     RAND_VAL = RAND();
+     WS_REVIEW_DATE_ADD  = TRUNC((21 - 1) * RAND_VAL) + 1;
+     WS_NEW_REVIEW_INT   = WS_TODAY_INT + WS_REVIEW_DATE_ADD;
+     /* Convert integer date back to YYYYMMDD using COBOL-style arith */
+     CALL INT_TO_YYYYMMDD(WS_NEW_REVIEW_INT, WS_NEW_REVIEW_CHAR);
+     CUST_CS_REV_YEAR  = SUBSTR(WS_NEW_REVIEW_CHAR, 1, 4);
+     CUST_CS_REV_MONTH = SUBSTR(WS_NEW_REVIEW_CHAR, 5, 2);
+     CUST_CS_REV_DAY   = SUBSTR(WS_NEW_REVIEW_CHAR, 7, 2);
+     CUST_CS_REV_INT   = WS_NEW_REVIEW_INT;
+     HV_CUSTOMER_CS_REVIEW_DATE = CUST_CS_REV_INT;
+
+     /* Customer created date = today                                 */
+     CUST_CREATED_INT = WS_CURRENT_DATE9;
+     HV_CUSTOMER_CREATE_DATE = CUST_CREATED_INT;
+
+     /* ------------------------------------------------------------- */
+     /*  INSERT CUSTOMER row into DB2                                 */
+     /* ------------------------------------------------------------- */
+     CALL WRITE_CUSTOMER_DB2;
+
+     /* ------------------------------------------------------------- */
+     /*  Generate accounts for this customer                          */
+     /* ------------------------------------------------------------- */
+     CALL DEFINE_ACC;
+
+     /* ------------------------------------------------------------- */
+     /*  Commit every 1000 inserts                                    */
+     /* ------------------------------------------------------------- */
+     COMMIT_COUNT = COMMIT_COUNT + 1;
+     IF COMMIT_COUNT > 1000 THEN DO;
+       EXEC SQL COMMIT WORK;
+       COMMIT_COUNT = 0;
+     END;
+
+     NEXT_KEY = NEXT_KEY + STEP_KEY;
+   END; /* end DO WHILE */
+
+   /* =============================================================== */
+   /*  Update CONTROL table - last customer number                    */
+   /* =============================================================== */
+   HV_CONTROL_NAME      = 'BANKZCUST' || SORTCODE || '  ';
+   HV_CONTROL_VALUE_NUM = LAST_CUSTOMER_NUMBER;
+   EXEC SQL UPDATE CONTROL
+            SET    CONTROL_VALUE_NUM = :HV_CONTROL_VALUE_NUM
+            WHERE  CONTROL_NAME      = :HV_CONTROL_NAME;
+   IF SQLCODE = 100 THEN DO;
+     HV_CONTROL_VALUE_STR = ' ';
+     EXEC SQL INSERT INTO CONTROL
+                    (CONTROL_NAME, CONTROL_VALUE_NUM, CONTROL_VALUE_STR)
+              VALUES (:HV_CONTROL_NAME,
+                      :HV_CONTROL_VALUE_NUM,
+                      :HV_CONTROL_VALUE_STR);
+   END;
+   IF SQLCODE ^= 0 & SQLCODE ^= 100 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+     DISPLAY('Error updating CONTROL table for customers. '
+          || 'CONTROL_NAME=' || HV_CONTROL_NAME
+          || ' SQLCODE=' || CHAR(SQLCODE_DISPLAY));
+   END;
+
+
+   /* =============================================================== */
+   /*  Update CONTROL table - ACCOUNT-LAST                            */
+   /* =============================================================== */
+   HV_CONTROL_NAME      = SORTCODE || '-ACCOUNT-LAST';
+   HV_CONTROL_VALUE_NUM = LAST_ACCOUNT_NUMBER;
+   HV_CONTROL_VALUE_STR = ' ';
+   EXEC SQL UPDATE CONTROL
+            SET    CONTROL_VALUE_NUM = :HV_CONTROL_VALUE_NUM
+            WHERE  CONTROL_NAME      = :HV_CONTROL_NAME;
+   IF SQLCODE ^= 0 & SQLCODE ^= 100 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+     DISPLAY('Error updating ACCOUNT-LAST control record '
+          || CHAR(SQLCODE_DISPLAY) || '.'
+          || HV_CONTROL_NAME);
+   END;
+
+   /* =============================================================== */
+   /*  Update CONTROL table - ACCOUNT-COUNT                           */
+   /* =============================================================== */
+   HV_CONTROL_NAME      = SORTCODE || '-ACCOUNT-COUNT';
+   HV_CONTROL_VALUE_NUM = NUMBER_OF_ACCOUNTS;
+   HV_CONTROL_VALUE_STR = ' ';
+   EXEC SQL UPDATE CONTROL
+            SET    CONTROL_VALUE_NUM = :HV_CONTROL_VALUE_NUM
+            WHERE  CONTROL_NAME      = :HV_CONTROL_NAME;
+   IF SQLCODE ^= 0 & SQLCODE ^= 100 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+     DISPLAY('Error updating ACCOUNT-COUNT control record '
+          || CHAR(SQLCODE_DISPLAY) || '.'
+          || HV_CONTROL_NAME);
+   END;
+
+   /* =============================================================== */
+   /*  Final commit                                                   */
+   /* =============================================================== */
+   EXEC SQL COMMIT WORK;
+   IF SQLCODE ^= 0 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+    DISPLAY('Error on final COMMIT. SQLCODE=' || CHAR(SQLCODE_DISPLAY));
+   END;
+
+   TIMESTAMP_MSG = 'Finishing BANKDATA';
+   CALL TIMESTAMP_PROC;
+
+   CALL PROGRAM_DONE;
+
+   /* =============================================================== */
+   /*  PROGRAM_DONE - set return code and exit                        */
+   /* =============================================================== */
+   PROGRAM_DONE: PROCEDURE;
+     CALL PLIRETV(RETURN_CODE);
+     GOBACK;
+   END PROGRAM_DONE;
+
+   /* =============================================================== */
+   /*  PARSE_PARM - parse JCL PARM= string                            */
+   /*  Format: start-key,end-key,step-key,random-seed                 */
+   /* =============================================================== */
+   PARSE_PARM: PROCEDURE;
+     DCL P_STR      CHAR(256);
+     DCL P_LEN      FIXED BIN(15);
+     DCL P_POS      FIXED BIN(15);
+     DCL P_C1       FIXED BIN(15);
+     DCL P_C2       FIXED BIN(15);
+     DCL P_C3       FIXED BIN(15);
+     DCL P_TOK      CHAR(20);
+
+     /* Fetch PARM from z/OS run-time via FETCH environment variable  */
+     /* On z/OS Enterprise PL/I the JCL PARM= is obtained by         */
+     /* declaring the procedure with a CHAR VARYING parm or by using  */
+     /* the PLISAXB built-in.  The simplest portable approach is to   */
+     /* read from a pre-allocated area.  We use the standard          */
+     /* z/OS PL/I method: PARM arrives as argv(1) under MAIN.        */
+     /* Under IBM Enterprise PL/I for z/OS, MAIN receives the PARM=  */
+     /* string as a half-word-length-prefixed string at the address   */
+     /* provided by the run-time.  We simulate that here.             */
+
+     /* Attempt to read via environment-provided parm address         */
+     /* (standard z/OS: address of parm buffer passed in R1)         */
+     P_STR = PARM_INPUT;
+     P_LEN = PARM_INPUT_LEN;
+     IF P_LEN = 0 THEN DO;
+       DISPLAY('No PARM supplied - using defaults 1,10,1,12345');
+       START_KEY   = 1;
+       END_KEY     = 10;
+       STEP_KEY    = 1;
+       RANDOM_SEED = 12345;
+       RETURN;
+     END;
+
+     /* Locate comma delimiters                                       */
+     P_C1 = INDEX(P_STR, ',');
+     IF P_C1 = 0 THEN P_C1 = P_LEN + 1;
+     P_C2 = INDEX(SUBSTR(P_STR, P_C1 + 1), ',');
+     IF P_C2 = 0 THEN P_C2 = P_LEN + 1;
+     ELSE P_C2 = P_C2 + P_C1;
+     P_C3 = INDEX(SUBSTR(P_STR, P_C2 + 1), ',');
+     IF P_C3 = 0 THEN P_C3 = P_LEN + 1;
+     ELSE P_C3 = P_C3 + P_C2;
+
+     /* START_KEY                                                     */
+     P_TOK = ' ';
+     IF P_C1 > 1 THEN P_TOK = SUBSTR(P_STR, 1, P_C1 - 1);
+     START_KEY = FIXED(TRIM(P_TOK), 31);
+
+     /* END_KEY                                                       */
+     P_TOK = ' ';
+     IF P_C2 > P_C1 + 1 THEN
+       P_TOK = SUBSTR(P_STR, P_C1 + 1, P_C2 - P_C1 - 1);
+     END_KEY = FIXED(TRIM(P_TOK), 31);
+
+     /* STEP_KEY                                                      */
+     P_TOK = ' ';
+     IF P_C3 > P_C2 + 1 THEN
+       P_TOK = SUBSTR(P_STR, P_C2 + 1, P_C3 - P_C2 - 1);
+     STEP_KEY = FIXED(TRIM(P_TOK), 31);
+     IF STEP_KEY = 0 THEN STEP_KEY = 1;
+
+     /* RANDOM_SEED                                                   */
+     P_TOK = ' ';
+     IF P_LEN >= P_C3 + 1 THEN
+       P_TOK = SUBSTR(P_STR, P_C3 + 1, P_LEN - P_C3);
+     RANDOM_SEED = FIXED(TRIM(P_TOK), 31);
+     IF RANDOM_SEED = 0 THEN RANDOM_SEED = 12345;
+
+     DISPLAY('PARMS: START=' || CHAR(START_KEY)
+          || ' END='   || CHAR(END_KEY)
+          || ' STEP='  || CHAR(STEP_KEY)
+          || ' SEED='  || CHAR(RANDOM_SEED));
+   END PARSE_PARM;
+
+   /* =============================================================== */
+   /*  GET_TODAYS_DATE - populate WS_CURRENT_DATE and WS_TODAY_INT    */
+   /* =============================================================== */
+   GET_TODAYS_DATE: PROCEDURE;
+     DCL TODAY_DATE CHAR(17);     /* from DATETIME() built-in         */
+     DCL YYYY CHAR(4);
+     DCL MM   CHAR(2);
+     DCL DD   CHAR(2);
+
+     /* DATETIME() returns 'YYYY-MM-DD HH:MM:SS'                      */
+     TODAY_DATE = DATETIME();
+     YYYY = SUBSTR(TODAY_DATE, 1, 4);
+     MM   = SUBSTR(TODAY_DATE, 6, 2);
+     DD   = SUBSTR(TODAY_DATE, 9, 2);
+
+     WS_CURRENT_DATE = YYYY || MM || DD;
+     WS_CURRENT_DATE9 = FIXED(WS_CURRENT_DATE, 31);
+
+     /* INTEGER-OF-DATE equivalent:                                   */
+     /* Lilian day number = days since 14-Oct-1582.                   */
+     /* We approximate using Julian day arithmetic for the offset     */
+     /* from a fixed epoch (1900-01-01 = Lilian 115861).              */
+     CALL YYYYMMDD_TO_INT(WS_CURRENT_DATE9, WS_TODAY_INT);
+   END GET_TODAYS_DATE;
+
+   /* =============================================================== */
+  /*  YYYYMMDD_TO_INT - convert YYYYMMDD integer to Lilian day number */
+   /*  Mirrors COBOL FUNCTION INTEGER-OF-DATE                         */
+   /* =============================================================== */
+   YYYYMMDD_TO_INT: PROCEDURE(P_YYYYMMDD, P_INT);
+     DCL P_YYYYMMDD FIXED BIN(31);
+     DCL P_INT      FIXED BIN(31);
+     DCL L_YYYY     FIXED BIN(15);
+     DCL L_MM       FIXED BIN(15);
+     DCL L_DD       FIXED BIN(15);
+     DCL L_Y        FIXED BIN(31);
+     DCL L_M        FIXED BIN(15);
+     /* Gregorian-to-JDN then adjust to Lilian (JDN - 2299161 + 1)   */
+    /* Simple formula: days from year 1, method compatible with COBOL */
+     L_YYYY = P_YYYYMMDD / 10000;
+     L_MM   = MOD(P_YYYYMMDD / 100, 100);
+     L_DD   = MOD(P_YYYYMMDD, 100);
+     L_M    = L_MM;
+     L_Y    = L_YYYY;
+     IF L_M <= 2 THEN DO;
+       L_Y = L_Y - 1;
+       L_M = L_M + 12;
+     END;
+     P_INT = TRUNC(365.25 * (L_Y + 4716))
+           + TRUNC(30.6001 * (L_M + 1))
+           + L_DD - 1524;
+     /* Subtract Julian Day of 1582-10-14 (Lilian epoch = JD 2299161) */
+     P_INT = P_INT - 2299160;
+   END YYYYMMDD_TO_INT;
+
+   /* =============================================================== */
+   /*  INT_TO_YYYYMMDD - convert Lilian day number to YYYYMMDD char8  */
+   /*  Mirrors COBOL FUNCTION DATE-OF-INTEGER                         */
+   /* =============================================================== */
+   INT_TO_YYYYMMDD: PROCEDURE(P_INT, P_CHAR8);
+     DCL P_INT   FIXED BIN(31);
+     DCL P_CHAR8 CHAR(8);
+     DCL L_JDN   FIXED BIN(31);
+     DCL L_A     FIXED BIN(31);
+     DCL L_B     FIXED BIN(31);
+     DCL L_C     FIXED BIN(31);
+     DCL L_D     FIXED BIN(31);
+     DCL L_E     FIXED BIN(31);
+     DCL L_M     FIXED BIN(15);
+     DCL L_Y     FIXED BIN(31);
+     DCL L_DD    FIXED BIN(15);
+     DCL L_MM_C  CHAR(2);
+     DCL L_DD_C  CHAR(2);
+     DCL L_YY_C  CHAR(4);
+
+     L_JDN = P_INT + 2299160;
+     L_A   = L_JDN + 32044;
+     L_B   = TRUNC((4 * L_A + 3) / 146097);
+     L_C   = L_A - TRUNC(146097 * L_B / 4);
+     L_D   = TRUNC((4 * L_C + 3) / 1461);
+     L_E   = L_C - TRUNC(1461 * L_D / 4);
+     L_M   = TRUNC((5 * L_E + 2) / 153);
+     L_DD  = L_E - TRUNC((153 * L_M + 2) / 5) + 1;
+     IF L_M < 10 THEN L_Y = 100 * L_B + L_D - 4800 + TRUNC(L_M/10);
+     ELSE              L_Y = 100 * L_B + L_D - 4800 + TRUNC(L_M/10);
+     L_M   = L_M + 3 - 12 * TRUNC(L_M/10);
+
+     /* Format with zero padding                                      */
+     L_YY_C = RIGHT(TRIM(CHAR(L_Y)), 4, '0');
+     L_MM_C = RIGHT(TRIM(CHAR(L_M)), 2, '0');
+     L_DD_C = RIGHT(TRIM(CHAR(L_DD)), 2, '0');
+     P_CHAR8 = L_YY_C || L_MM_C || L_DD_C;
+   END INT_TO_YYYYMMDD;
+
+   /* =============================================================== */
+   /*  WRITE_CUSTOMER_DB2 - INSERT one row into CUSTOMER table        */
+   /* =============================================================== */
+   WRITE_CUSTOMER_DB2: PROCEDURE;
+     EXEC SQL INSERT INTO CUSTOMER
+                     (CUSTOMER_EYECATCHER,
+                      CUSTOMER_SORTCODE,
+                      CUSTOMER_NUMBER,
+                      CUSTOMER_TITLE,
+                      CUSTOMER_FIRST_NAME,
+                      CUSTOMER_LAST_NAME,
+                      CUSTOMER_DATE_OF_BIRTH,
+                      CUSTOMER_PHONE,
+                      CUSTOMER_ADDR_LINE1,
+                      CUSTOMER_ADDR_LINE2,
+                      CUSTOMER_CITY,
+                      CUSTOMER_POSTCODE,
+                      CUSTOMER_COUNTRY,
+                      CUSTOMER_STATUS,
+                      CUSTOMER_CREATED_DATE,
+                      CUSTOMER_CREDIT_SCORE,
+                      CUSTOMER_CS_REVIEW_DATE)
+              VALUES (:HV_CUSTOMER_EYECATCHER,
+                      :HV_CUSTOMER_SORTCODE,
+                      :HV_CUSTOMER_NUMBER,
+                      :HV_CUSTOMER_TITLE,
+                      :HV_CUSTOMER_FIRST_NAME,
+                      :HV_CUSTOMER_LAST_NAME,
+                      :HV_CUSTOMER_DOB,
+                      :HV_CUSTOMER_PHONE,
+                      :HV_CUSTOMER_ADDR_LINE1,
+                      :HV_CUSTOMER_ADDR_LINE2,
+                      :HV_CUSTOMER_CITY,
+                      :HV_CUSTOMER_POSTCODE,
+                      :HV_CUSTOMER_COUNTRY,
+                      :HV_CUSTOMER_STATUS,
+                      :HV_CUSTOMER_CREATE_DATE,
+                      :HV_CUSTOMER_CREDIT_SCORE,
+                      :HV_CUSTOMER_CS_REVIEW_DATE);
+     IF SQLCODE ^= 0 THEN DO;
+       SQLCODE_DISPLAY = SQLCODE;
+       DISPLAY('Error inserting CUSTOMER row. '
+            || 'CUSTOMER=' || HV_CUSTOMER_NUMBER
+            || ' SORTCODE=' || HV_CUSTOMER_SORTCODE
+            || ' SQLCODE=' || CHAR(SQLCODE_DISPLAY)
+            || ' SQLSTATE=' || SQLSTATE);
+       RETURN_CODE = 12;
+       CALL PROGRAM_DONE;
+     END;
+   END WRITE_CUSTOMER_DB2;
+
+   /* =============================================================== */
+   /*  DEFINE_ACC - decide number of accounts and loop to create them */
+   /* =============================================================== */
+   DEFINE_ACC: PROCEDURE;
+     DCL ACC_I   FIXED BIN(15);
+
+     RAND_VAL     = RAND();
+     NO_OF_ACCOUNTS = TRUNC((5 - 1) * RAND_VAL) + 1;
+     IF NO_OF_ACCOUNTS < 1 THEN NO_OF_ACCOUNTS = 1;
+     IF NO_OF_ACCOUNTS > 5 THEN NO_OF_ACCOUNTS = 5;
+
+     DO ACC_I = 1 TO NO_OF_ACCOUNTS;
+       ACC_CTR = ACC_I;
+       CALL POPULATE_ACC;
+     END;
+
+     EXEC SQL COMMIT WORK;
+   END DEFINE_ACC;
+
+   /* =============================================================== */
+   /*  POPULATE_ACC - generate one ACCOUNT record and INSERT it       */
+   /* =============================================================== */
+   POPULATE_ACC: PROCEDURE;
+     DCL ACC_TYPE_IDX  FIXED BIN(15);
+     DCL ACC_NO_CHAR   CHAR(8);
+     DCL HOUSE_NO_CHAR CHAR(2);
+
+     /* Generate account opened date after customer DOB               */
+     ACC_OPENED_DAY   = 0;
+     ACC_OPENED_MONTH = 0;
+     ACC_OPENED_YEAR  = 0;
+     OPENED_DATE_TRIES = 0;
+     OPENED_DATE_VALID = 'N';
+     DO WHILE (OPENED_DATE_VALID = 'N');
+       CALL GENERATE_OPENED_DATE;
+     END;
+
+     /* Determine account type index cycling by ACC_CTR mod 5         */
+     ACC_TYPE_IDX = MOD(ACC_CTR - 1, ACC_TYPES_COUNT) + 1;
+     IF ACC_TYPE_IDX < 1 THEN ACC_TYPE_IDX = 1;
+  IF ACC_TYPE_IDX > ACC_TYPES_COUNT THEN ACC_TYPE_IDX = ACC_TYPES_COUNT;
+
+     /* Format account number as 8-char zero-filled string            */
+     ACC_NO_CHAR = RIGHT(TRIM(CHAR(WS_ACCOUNT_NUMBER)), 8, '0');
+
+     HV_ACCOUNT_EYECATCHER      = 'ACCT';
+     HV_ACCOUNT_CUST_NO         = HV_CUSTOMER_NUMBER;
+     HV_ACCOUNT_SORT_CODE       = SORTCODE;
+     HV_ACCOUNT_NUMBER          = ACC_NO_CHAR;
+     HV_ACCOUNT_TYPE            = ACC_TYPES(ACC_TYPE_IDX);
+     HV_ACCOUNT_INTEREST_RATE   = ACC_INT_RATES(ACC_TYPE_IDX);
+     HV_ACCOUNT_OVERDRAFT_LIMIT = ACC_OVERDRAFT(ACC_TYPE_IDX);
+
+     /* Opened date in DD.MM.YYYY format                              */
+     HV_ACCOUNT_OPENED = RIGHT(TRIM(CHAR(ACC_OPENED_DAY)),  2, '0')
+                      || '.'
+                      || RIGHT(TRIM(CHAR(ACC_OPENED_MONTH)), 2, '0')
+                      || '.'
+                      || RIGHT(TRIM(CHAR(ACC_OPENED_YEAR)),  4, '0');
+
+     /* Statement dates - fixed values matching COBOL source          */
+     HV_ACCOUNT_LAST_STMT_DATE = '01.07.2021';
+     HV_ACCOUNT_NEXT_STMT_DATE = '01.08.2021';
+
+     /* Random balance                                                */
+     RAND_VAL    = RAND();
+     ACC_BALANCE = (999999 - 1) * RAND_VAL + 1;
+     HV_ACCOUNT_AVAILABLE_BAL = ACC_BALANCE;
+     HV_ACCOUNT_ACTUAL_BAL    = ACC_BALANCE;
+
+     /* Loan and mortgage have negative balance                       */
+     IF HV_ACCOUNT_TYPE = 'LOAN    ' |
+        HV_ACCOUNT_TYPE = 'MORTGAGE' THEN DO;
+       HV_ACCOUNT_ACTUAL_BAL    = -HV_ACCOUNT_ACTUAL_BAL;
+       HV_ACCOUNT_AVAILABLE_BAL = -HV_ACCOUNT_AVAILABLE_BAL;
+     END;
+
+     EXEC SQL INSERT INTO ACCOUNT
+                     (ACCOUNT_EYECATCHER,
+                      ACCOUNT_CUSTOMER_NUMBER,
+                      ACCOUNT_SORTCODE,
+                      ACCOUNT_NUMBER,
+                      ACCOUNT_TYPE,
+                      ACCOUNT_INTEREST_RATE,
+                      ACCOUNT_OPENED,
+                      ACCOUNT_OVERDRAFT_LIMIT,
+                      ACCOUNT_LAST_STATEMENT,
+                      ACCOUNT_NEXT_STATEMENT,
+                      ACCOUNT_AVAILABLE_BALANCE,
+                      ACCOUNT_ACTUAL_BALANCE)
+              VALUES (:HV_ACCOUNT_EYECATCHER,
+                      :HV_ACCOUNT_CUST_NO,
+                      :HV_ACCOUNT_SORT_CODE,
+                      :HV_ACCOUNT_NUMBER,
+                      :HV_ACCOUNT_TYPE,
+                      :HV_ACCOUNT_INTEREST_RATE,
+                      :HV_ACCOUNT_OPENED,
+                      :HV_ACCOUNT_OVERDRAFT_LIMIT,
+                      :HV_ACCOUNT_LAST_STMT_DATE,
+                      :HV_ACCOUNT_NEXT_STMT_DATE,
+                      :HV_ACCOUNT_AVAILABLE_BAL,
+                      :HV_ACCOUNT_ACTUAL_BAL);
+
+     IF SQLCODE ^= 0 THEN DO;
+       SQLCODE_DISPLAY = SQLCODE;
+       /* Classify reason code                                        */
+       IF SQLERRD(3) = 13172878 THEN
+         DISP_REASON_CODE = 'TIMEOUT  (00C900E)';
+       ELSE IF SQLERRD(3) = 13172872 THEN
+         DISP_REASON_CODE = 'DEADLOCK (00C9088)';
+       ELSE
+         DISP_REASON_CODE = 'Unknown ReasonCode';
+       DISPLAY(DISP_REASON_CODE);
+       DISPLAY('Error inserting rows on ACCOUNT table.'
+            || 'For ACC no=' || HV_ACCOUNT_NUMBER
+            || ' for SORTCODE=' || HV_ACCOUNT_SORT_CODE
+            || ' SQLCODE=' || CHAR(SQLCODE_DISPLAY)
+            || ',SQLSTATE=' || SQLSTATE
+            || ',SQLERRMC=' || SUBSTR(SQLERRMC, 1, SQLERRML)
+            || ',sqlerrd(1)=' || CHAR(SQLERRD(1))
+            || ',sqlerrd(2)=' || CHAR(SQLERRD(2))
+            || ',sqlerrd(3)=' || CHAR(SQLERRD(3))
+            || ',sqlerrd(4)=' || CHAR(SQLERRD(4))
+            || ',sqlerrd(5)=' || CHAR(SQLERRD(5))
+            || ',sqlerrd(6)=' || CHAR(SQLERRD(6)));
+       RETURN_CODE = 12;
+       CALL PROGRAM_DONE;
+     END;
+
+     LAST_ACCOUNT_NUMBER  = WS_ACCOUNT_NUMBER;
+     NUMBER_OF_ACCOUNTS   = NUMBER_OF_ACCOUNTS + 1;
+     WS_ACCOUNT_NUMBER    = WS_ACCOUNT_NUMBER + 1;
+   END POPULATE_ACC;
+
+   /* =============================================================== */
+   /*  GENERATE_OPENED_DATE - random date after customer DOB          */
+   /* =============================================================== */
+   GENERATE_OPENED_DATE: PROCEDURE;
+     RAND_VAL = RAND();
+     ACC_OPENED_DAY   = TRUNC((28 - 1) * RAND_VAL) + 1;
+     IF ACC_OPENED_DAY < 1  THEN ACC_OPENED_DAY = 1;
+     IF ACC_OPENED_DAY > 28 THEN ACC_OPENED_DAY = 28;
+
+     RAND_VAL = RAND();
+     ACC_OPENED_MONTH = TRUNC((12 - 1) * RAND_VAL) + 1;
+     IF ACC_OPENED_MONTH < 1  THEN ACC_OPENED_MONTH = 1;
+     IF ACC_OPENED_MONTH > 12 THEN ACC_OPENED_MONTH = 12;
+
+     RAND_VAL = RAND();
+     ACC_OPENED_YEAR  = TRUNC((2014 - CUST_DOB_YEAR) * RAND_VAL)
+                      + CUST_DOB_YEAR;
+     IF ACC_OPENED_YEAR < CUST_DOB_YEAR THEN
+       ACC_OPENED_YEAR = CUST_DOB_YEAR;
+
+     OPENED_DATE_TRIES = OPENED_DATE_TRIES + 1;
+
+     /* Valid if opened year strictly after birth year                */
+     IF ACC_OPENED_YEAR > CUST_DOB_YEAR THEN DO;
+       OPENED_DATE_VALID = 'Y';
+       RETURN;
+     END;
+
+     /* Safety valve: after 100 attempts use DOB                      */
+     IF OPENED_DATE_TRIES > 100 THEN DO;
+       OPENED_DATE_VALID = 'Y';
+       ACC_OPENED_DAY    = CUST_DOB_DAY;
+       ACC_OPENED_MONTH  = CUST_DOB_MONTH;
+       ACC_OPENED_YEAR   = CUST_DOB_YEAR;
+     END;
+   END GENERATE_OPENED_DATE;
+
+   /* =============================================================== */
+   /*  DELETE_DB2_ROWS - delete CUSTOMER, ACCOUNT, CONTROL tables     */
+   /*  and insert initial CONTROL records                             */
+   /* =============================================================== */
+   DELETE_DB2_ROWS: PROCEDURE;
+
+     /* --- Delete CUSTOMER table --- */
+     TIMESTAMP_MSG = 'Deleting from CUSTOMER table';
+     CALL TIMESTAMP_PROC;
+     EXEC SQL DELETE FROM CUSTOMER;
+     TIMESTAMP_MSG = 'Deleting from CUSTOMER table COMPLETE';
+     CALL TIMESTAMP_PROC;
+     IF SQLCODE ^= 100 & SQLCODE ^= 0 THEN DO;
+       SQLCODE_DISPLAY = SQLCODE;
+       IF SQLERRD(3) = 13172878 THEN
+         DISP_REASON_CODE = 'TIMEOUT  (00C900E)';
+       ELSE IF SQLERRD(3) = 13172872 THEN
+         DISP_REASON_CODE = 'DEADLOCK (00C9088)';
+       ELSE
+         DISP_REASON_CODE = 'Unknown ReasonCode';
+       DISPLAY('Error deleting rows from CUSTOMER table.'
+            || ' SQLCODE=' || CHAR(SQLCODE_DISPLAY)
+            || ' SQLREASON=' || DISP_REASON_CODE
+            || ' ( ' || CHAR(SQLERRD(3)) || ')'
+            || ',SQLSTATE=' || SQLSTATE
+            || ',SQLERRMC=' || SUBSTR(SQLERRMC, 1, SQLERRML)
+            || ',sqlerrd(1)=' || CHAR(SQLERRD(1))
+            || ',sqlerrd(2)=' || CHAR(SQLERRD(2))
+            || ',sqlerrd(3)=' || CHAR(SQLERRD(3))
+            || ',sqlerrd(4)=' || CHAR(SQLERRD(4))
+            || ',sqlerrd(5)=' || CHAR(SQLERRD(5))
+            || ',sqlerrd(6)=' || CHAR(SQLERRD(6)));
+       RETURN_CODE = 12;
+       CALL PROGRAM_DONE;
+     END;
+
+     /* --- Delete ACCOUNT table --- */
+     TIMESTAMP_MSG = 'Deleting from ACCOUNT table';
+     CALL TIMESTAMP_PROC;
+     EXEC SQL DELETE FROM ACCOUNT;
+     TIMESTAMP_MSG = 'Deleting from ACCOUNT table COMPLETE';
+     CALL TIMESTAMP_PROC;
+     IF SQLCODE ^= 100 & SQLCODE ^= 0 THEN DO;
+       SQLCODE_DISPLAY = SQLCODE;
+       IF SQLERRD(3) = 13172878 THEN
+         DISP_REASON_CODE = 'TIMEOUT  (00C900E)';
+       ELSE IF SQLERRD(3) = 13172872 THEN
+         DISP_REASON_CODE = 'DEADLOCK (00C9088)';
+       ELSE
+         DISP_REASON_CODE = 'Unknown ReasonCode';
+       DISPLAY('Error deleting rows from ACCOUNT table.'
+            || ' SQLCODE=' || CHAR(SQLCODE_DISPLAY)
+            || ' SQLREASON=' || DISP_REASON_CODE
+            || ' ( ' || CHAR(SQLERRD(3)) || ')'
+            || ',SQLSTATE=' || SQLSTATE
+            || ',SQLERRMC=' || SUBSTR(SQLERRMC, 1, SQLERRML)
+            || ',sqlerrd(1)=' || CHAR(SQLERRD(1))
+            || ',sqlerrd(2)=' || CHAR(SQLERRD(2))
+            || ',sqlerrd(3)=' || CHAR(SQLERRD(3))
+            || ',sqlerrd(4)=' || CHAR(SQLERRD(4))
+            || ',sqlerrd(5)=' || CHAR(SQLERRD(5))
+            || ',sqlerrd(6)=' || CHAR(SQLERRD(6)));
+       RETURN_CODE = 12;
+       CALL PROGRAM_DONE;
+     END;
+
+     /* --- Delete CONTROL table --- */
+     TIMESTAMP_MSG = 'Deleting from CONTROL table';
+     CALL TIMESTAMP_PROC;
+     EXEC SQL DELETE FROM CONTROL;
+     TIMESTAMP_MSG = 'Deleting from CONTROL table COMPLETE';
+     CALL TIMESTAMP_PROC;
+     IF SQLCODE ^= 100 & SQLCODE ^= 0 THEN DO;
+       SQLCODE_DISPLAY = SQLCODE;
+       IF SQLERRD(3) = 13172878 THEN
+         DISP_REASON_CODE = 'TIMEOUT  (00C900E)';
+       ELSE IF SQLERRD(3) = 13172872 THEN
+         DISP_REASON_CODE = 'DEADLOCK (00C9088)';
+       ELSE
+         DISP_REASON_CODE = 'Unknown ReasonCode';
+       DISPLAY('Error deleting rows from CONTROL table.'
+            || ' SQLCODE=' || CHAR(SQLCODE_DISPLAY)
+            || ' SQLREASON=' || DISP_REASON_CODE
+            || ' ( ' || CHAR(SQLERRD(3)) || ')'
+            || ',SQLSTATE=' || SQLSTATE
+            || ',SQLERRMC=' || SUBSTR(SQLERRMC, 1, SQLERRML)
+            || ',sqlerrd(1)=' || CHAR(SQLERRD(1))
+            || ',sqlerrd(2)=' || CHAR(SQLERRD(2))
+            || ',sqlerrd(3)=' || CHAR(SQLERRD(3))
+            || ',sqlerrd(4)=' || CHAR(SQLERRD(4))
+            || ',sqlerrd(5)=' || CHAR(SQLERRD(5))
+            || ',sqlerrd(6)=' || CHAR(SQLERRD(6)));
+       RETURN_CODE = 12;
+       CALL PROGRAM_DONE;
+     END;
+
+     /* --- Insert initial CONTROL records --- */
+     CALL INSERT_INITIAL_CONTROL_RECORDS;
+
+     EXEC SQL COMMIT WORK;
+   END DELETE_DB2_ROWS;
+
+   /* =============================================================== */
+   /*  INSERT_INITIAL_CONTROL_RECORDS                                 */
+   /*  Matches the initial seed data from Db2-insert.jcl              */
+   /* =============================================================== */
+   INSERT_INITIAL_CONTROL_RECORDS: PROCEDURE;
+
+     /* Default sortcode BANKZCUST record                             */
+     HV_CONTROL_NAME      = 'BANKZCUST' || SORTCODE || '  ';
+     HV_CONTROL_VALUE_NUM = 1;
+     HV_CONTROL_VALUE_STR = ' ';
+     EXEC SQL INSERT INTO CONTROL
+                    (CONTROL_NAME, CONTROL_VALUE_NUM, CONTROL_VALUE_STR)
+              VALUES (:HV_CONTROL_NAME,
+                      :HV_CONTROL_VALUE_NUM,
+                      :HV_CONTROL_VALUE_STR);
+     IF SQLCODE ^= 0 THEN DO;
+       SQLCODE_DISPLAY = SQLCODE;
+       DISPLAY('Error inserting CONTROL record for sortcode '
+            || SORTCODE
+            || ' SQLCODE=' || CHAR(SQLCODE_DISPLAY));
+     END;
+
+     /* 0005OCCS                                                      */
+     HV_CONTROL_NAME      = 'BANKZCUST0005OCCS  ';
+     HV_CONTROL_VALUE_NUM = 0;
+     HV_CONTROL_VALUE_STR = ' ';
+     EXEC SQL INSERT INTO CONTROL
+                    (CONTROL_NAME, CONTROL_VALUE_NUM, CONTROL_VALUE_STR)
+              VALUES (:HV_CONTROL_NAME,
+                      :HV_CONTROL_VALUE_NUM,
+                      :HV_CONTROL_VALUE_STR);
+     IF SQLCODE ^= 0 THEN DO;
+       SQLCODE_DISPLAY = SQLCODE;
+       DISPLAY('Error inserting CONTROL record for 0005OCCS'
+            || ' SQLCODE=' || CHAR(SQLCODE_DISPLAY));
+     END;
+
+     /* 0006OCCS                                                      */
+     HV_CONTROL_NAME      = 'BANKZCUST0006OCCS  ';
+     HV_CONTROL_VALUE_NUM = 0;
+     EXEC SQL INSERT INTO CONTROL
+                    (CONTROL_NAME, CONTROL_VALUE_NUM, CONTROL_VALUE_STR)
+              VALUES (:HV_CONTROL_NAME,
+                      :HV_CONTROL_VALUE_NUM,
+                      :HV_CONTROL_VALUE_STR);
+     IF SQLCODE ^= 0 THEN DO;
+       SQLCODE_DISPLAY = SQLCODE;
+       DISPLAY('Error inserting CONTROL record for 0006OCCS'
+            || ' SQLCODE=' || CHAR(SQLCODE_DISPLAY));
+     END;
+
+     /* 0007OCCS                                                      */
+     HV_CONTROL_NAME      = 'BANKZCUST0007OCCS  ';
+     HV_CONTROL_VALUE_NUM = 0;
+     EXEC SQL INSERT INTO CONTROL
+                    (CONTROL_NAME, CONTROL_VALUE_NUM, CONTROL_VALUE_STR)
+              VALUES (:HV_CONTROL_NAME,
+                      :HV_CONTROL_VALUE_NUM,
+                      :HV_CONTROL_VALUE_STR);
+     IF SQLCODE ^= 0 THEN DO;
+       SQLCODE_DISPLAY = SQLCODE;
+       DISPLAY('Error inserting CONTROL record for 0007OCCS'
+            || ' SQLCODE=' || CHAR(SQLCODE_DISPLAY));
+     END;
+
+     /* 0008OCCS                                                      */
+     HV_CONTROL_NAME      = 'BANKZCUST0008OCCS  ';
+     HV_CONTROL_VALUE_NUM = 0;
+     EXEC SQL INSERT INTO CONTROL
+                    (CONTROL_NAME, CONTROL_VALUE_NUM, CONTROL_VALUE_STR)
+              VALUES (:HV_CONTROL_NAME,
+                      :HV_CONTROL_VALUE_NUM,
+                      :HV_CONTROL_VALUE_STR);
+     IF SQLCODE ^= 0 THEN DO;
+       SQLCODE_DISPLAY = SQLCODE;
+       DISPLAY('Error inserting CONTROL record for 0008OCCS'
+            || ' SQLCODE=' || CHAR(SQLCODE_DISPLAY));
+     END;
+
+     /* 0009OCCS                                                      */
+     HV_CONTROL_NAME      = 'BANKZCUST0009OCCS  ';
+     HV_CONTROL_VALUE_NUM = 0;
+     EXEC SQL INSERT INTO CONTROL
+                    (CONTROL_NAME, CONTROL_VALUE_NUM, CONTROL_VALUE_STR)
+              VALUES (:HV_CONTROL_NAME,
+                      :HV_CONTROL_VALUE_NUM,
+                      :HV_CONTROL_VALUE_STR);
+     IF SQLCODE ^= 0 THEN DO;
+       SQLCODE_DISPLAY = SQLCODE;
+       DISPLAY('Error inserting CONTROL record for 0009OCCS'
+            || ' SQLCODE=' || CHAR(SQLCODE_DISPLAY));
+     END;
+
+     /* ACCOUNT-LAST for default sortcode                             */
+     HV_CONTROL_NAME      = SORTCODE || '-ACCOUNT-LAST';
+     HV_CONTROL_VALUE_NUM = 1;
+     HV_CONTROL_VALUE_STR = ' ';
+     EXEC SQL INSERT INTO CONTROL
+                    (CONTROL_NAME, CONTROL_VALUE_NUM, CONTROL_VALUE_STR)
+              VALUES (:HV_CONTROL_NAME,
+                      :HV_CONTROL_VALUE_NUM,
+                      :HV_CONTROL_VALUE_STR);
+     IF SQLCODE ^= 0 THEN DO;
+       SQLCODE_DISPLAY = SQLCODE;
+       DISPLAY('Error inserting ACCOUNT-LAST control record'
+            || ' SQLCODE=' || CHAR(SQLCODE_DISPLAY));
+     END;
+
+     /* ACCOUNT-COUNT for default sortcode                            */
+     HV_CONTROL_NAME      = SORTCODE || '-ACCOUNT-COUNT';
+     HV_CONTROL_VALUE_NUM = 1;
+     HV_CONTROL_VALUE_STR = ' ';
+     EXEC SQL INSERT INTO CONTROL
+                    (CONTROL_NAME, CONTROL_VALUE_NUM, CONTROL_VALUE_STR)
+              VALUES (:HV_CONTROL_NAME,
+                      :HV_CONTROL_VALUE_NUM,
+                      :HV_CONTROL_VALUE_STR);
+     IF SQLCODE ^= 0 THEN DO;
+       SQLCODE_DISPLAY = SQLCODE;
+       DISPLAY('Error inserting ACCOUNT-COUNT control record'
+            || ' SQLCODE=' || CHAR(SQLCODE_DISPLAY));
+     END;
+   END INSERT_INITIAL_CONTROL_RECORDS;
+
+   /* =============================================================== */
+   /*  TIMESTAMP_PROC - display timestamp message                     */
+   /* =============================================================== */
+   TIMESTAMP_PROC: PROCEDURE;
+     DCL DTIME CHAR(17);
+     DTIME = DATETIME();
+     DISPLAY(TIMESTAMP_MSG || ' AT ' || DTIME);
+   END TIMESTAMP_PROC;
+
+ END BANKDATA;

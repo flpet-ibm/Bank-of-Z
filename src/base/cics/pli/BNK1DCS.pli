@@ -1,0 +1,1269 @@
+ *PROCESS CICS;
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                        */
+ /* ----------------------------------------------------------------- */
+ /*  BNK1DCS - Display Customer (BMS CICS program)                  */
+ /*  Converted from COBOL BNK1DCS.cbl                               */
+ /*  Displays customer details; PF5 deletes, PF10 allows an update. */
+ /* ----------------------------------------------------------------- */
+ BNK1DCS: PROCEDURE OPTIONS(MAIN REENTRANT);
+
+   /* --------------------------------------------------------------- */
+   /*  BMS symbolic map include (BNK1DCM mapset)                      */
+   /* --------------------------------------------------------------- */
+   %INCLUDE BNK1DCM;
+
+   /* --------------------------------------------------------------- */
+   /*  Abend info structure                                           */
+   /* --------------------------------------------------------------- */
+   %INCLUDE ABNDINFO;
+
+   /* --------------------------------------------------------------- */
+   /*  INQCUST / DELCUS / UPDCUST commareas                           */
+   /* --------------------------------------------------------------- */
+   %INCLUDE INQCUSTZ;
+   %INCLUDE DELCUS;
+   %INCLUDE UPDCUST;
+
+   /* --------------------------------------------------------------- */
+   /*  CICS response codes                                            */
+   /* --------------------------------------------------------------- */
+   DCL WS_CICS_RESP          FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2         FIXED BIN(31) INIT(0);
+
+   /* --------------------------------------------------------------- */
+   /*  Fail info (mirrors WS-FAIL-INFO)                               */
+   /* --------------------------------------------------------------- */
+   DCL 1 WS_FAIL_INFO,
+         2 WS_FI_PGM         CHAR(9)  INIT('BNK1DCS  '),
+         2 WS_CICS_FAIL_MSG  CHAR(70) INIT(' '),
+         2 WS_FI_RESP_LBL    CHAR(6)  INIT(' RESP='),
+         2 WS_CICS_RESP_DISP CHAR(10) INIT('0000000000'),
+         2 WS_FI_RESP2_LBL   CHAR(7)  INIT(' RESP2='),
+         2 WS_CICS_RESP2_DISP CHAR(10) INIT('0000000000'),
+         2 WS_FI_ABEND       CHAR(15) INIT(' ABENDING TASK.');
+
+   /* --------------------------------------------------------------- */
+   /*  Switches and flags                                             */
+   /* --------------------------------------------------------------- */
+   DCL VALID_DATA_SW         CHAR(1) INIT('Y');
+   DCL SEND_FLAG             CHAR(1);
+   DCL SEND_ERASE_C          CHAR(1) INIT('1'); /* SEND-ERASE        */
+   DCL SEND_DATAONLY_C       CHAR(1) INIT('2'); /* SEND-DATAONLY     */
+   DCL SEND_DATAONLY_ALARM_C CHAR(1) INIT('3'); /* DATAONLY+ALARM    */
+   DCL ACTION_NUM            PIC '9';
+
+   /* --------------------------------------------------------------- */
+   /*  End of session message                                         */
+   /* --------------------------------------------------------------- */
+   DCL END_OF_SESSION_MESSAGE CHAR(13) INIT('Session Ended');
+
+   /* --------------------------------------------------------------- */
+   /*  Response code / communication area placeholder                 */
+   /* --------------------------------------------------------------- */
+   DCL RESPONSE_CODE         FIXED BIN(31) INIT(0);
+   DCL COMMUNICATION_AREA    CHAR(1);
+
+   /* --------------------------------------------------------------- */
+   /*  DFHAID constants                                               */
+   /* --------------------------------------------------------------- */
+   DCL DFHENTER  CHAR(1) INIT('7D'X);
+   DCL DFHCLEAR  CHAR(1) INIT('6D'X);
+   DCL DFHPA1    CHAR(1) INIT('6C'X);
+   DCL DFHPA2    CHAR(1) INIT('6E'X);
+   DCL DFHPA3    CHAR(1) INIT('6B'X);
+   DCL DFHPF3    CHAR(1) INIT('F3'X);
+   DCL DFHPF5    CHAR(1) INIT('C5'X);
+   DCL DFHPF10   CHAR(1) INIT('7A'X);
+   DCL DFHPF12   CHAR(1) INIT('7C'X);
+
+   /* --------------------------------------------------------------- */
+   /*  DFHBMSCA attribute constants used by this program              */
+   /* --------------------------------------------------------------- */
+   DCL DFHGREEN  CHAR(1) INIT('F4'X);
+   DCL DFHNEUTR  CHAR(1) INIT('F7'X);
+   DCL DFHUNDLN  CHAR(1) INIT('F4'X);
+   DCL DFHBMASK  CHAR(1) INIT('F0'X);
+   DCL DFHBMPRF  CHAR(1) INIT('60'X);
+   DCL DFHBMFSE  CHAR(1) INIT('C1'X);
+
+   /* --------------------------------------------------------------- */
+   /*  UCTRANS working storage                                        */
+   /* --------------------------------------------------------------- */
+   DCL WS_UCTRANS            FIXED BIN(31) INIT(0);
+   DCL STORED_UCTRANS        FIXED BIN(31) INIT(0);
+
+   /* --------------------------------------------------------------- */
+   /*  Split work areas                                               */
+   /* --------------------------------------------------------------- */
+   DCL 1 COMM_DOB_SPLIT,
+         2 COMM_DOB_SPLIT_DD    CHAR(2),
+         2 COMM_DOB_SPLIT_MM    CHAR(2),
+         2 COMM_DOB_SPLIT_YYYY  CHAR(4);
+
+   DCL 1 COMM_ADDR_SPLIT,
+         2 COMM_ADDR_SPLIT1     CHAR(60),
+         2 COMM_ADDR_SPLIT2     CHAR(60),
+         2 COMM_ADDR_SPLIT3     CHAR(40);
+
+   DCL 1 COMM_ADDR_UPD_SPLIT,
+         2 COMM_ADDR_UPD1       CHAR(60),
+         2 COMM_ADDR_UPD2       CHAR(60),
+         2 COMM_ADDR_UPD3       CHAR(40);
+
+   /* Update-format work areas (character, REDEFINES not needed)    */
+   DCL 1 COMM_DOB_UPD_FORMAT,
+         2 COMM_DOBX_DD         CHAR(2),
+         2 COMM_DOBX_MM         CHAR(2),
+         2 COMM_DOBX_YYYY       CHAR(4);
+
+   DCL 1 COMM_CS_REVIEW_UPD_FORMAT,
+         2 COMM_CS_REVIEWX_DD   CHAR(2),
+         2 COMM_CS_REVIEWX_MM   CHAR(2),
+         2 COMM_CS_REVIEWX_YYYY CHAR(4);
+
+   DCL CREDIT_SCORE_X        CHAR(3);
+   DCL CREDIT_SCORE_9        PIC '999';
+
+   /* --------------------------------------------------------------- */
+   /*  Name validation work fields                                    */
+   /* --------------------------------------------------------------- */
+   DCL WS_VALIDATE_NAME      CHAR(60) INIT(' ');
+   DCL WS_UNSTR_TITLE        CHAR(9)  INIT(' ');
+   DCL WS_LAST_SPACE_POS     FIXED DEC(2,0) INIT(0);
+   DCL WS_NAME_INDEX         FIXED DEC(2,0) INIT(0);
+   DCL WS_TEMP_NAME          CHAR(60) INIT(' ');
+   DCL WS_FIRST_NAME_LEN     FIXED DEC(2,0) INIT(0);
+   DCL WS_TITLE_VALID        CHAR(1)  INIT(' ');
+
+   /* --------------------------------------------------------------- */
+   /*  Date / time working storage                                    */
+   /* --------------------------------------------------------------- */
+   DCL WS_U_TIME             FIXED DEC(15,0) INIT(0);
+   DCL WS_ORIG_DATE          CHAR(10);
+   DCL WS_TIME_NOW           CHAR(6);
+
+   /* --------------------------------------------------------------- */
+   /*  Abend program name / misc                                      */
+   /* --------------------------------------------------------------- */
+   DCL WS_ABEND_PGM          CHAR(8) INIT('ABNDPROC');
+   DCL WS_CA_LEN             FIXED BIN(15);
+   DCL BNK1DCI_ALL           CHAR(577) BASED(ADDR(BNK1DCI));
+
+   /* --------------------------------------------------------------- */
+   /*  Working storage commarea copy (for RETURN COMMAREA)            */
+   /*  Numeric display fields are held as CHAR (same bytes).          */
+   /* --------------------------------------------------------------- */
+   DCL 1 WS_COMM_AREA,
+         2 WS_COMM_TERM         FIXED BIN(31),
+         2 WS_COMM_REST,
+           3 WS_COMM_EYE        CHAR(4),
+           3 WS_COMM_SCODE      CHAR(6),
+           3 WS_COMM_CUSTNO     CHAR(10),
+           3 WS_COMM_TITLE      CHAR(10),
+           3 WS_COMM_FIRST_NAME CHAR(50),
+           3 WS_COMM_LAST_NAME  CHAR(50),
+           3 WS_COMM_DOB        CHAR(8),
+           3 WS_COMM_PHONE      CHAR(20),
+           3 WS_COMM_ADDR_LINE1 CHAR(50),
+           3 WS_COMM_ADDR_LINE2 CHAR(50),
+           3 WS_COMM_CITY       CHAR(50),
+           3 WS_COMM_POSTCODE   CHAR(10),
+           3 WS_COMM_COUNTRY    CHAR(50),
+           3 WS_COMM_STATUS     CHAR(10),
+           3 WS_COMM_CREATED_DATE CHAR(8),
+           3 WS_COMM_CREDIT_SCORE CHAR(3),
+           3 WS_COMM_CS_REVIEW_DATE CHAR(8),
+           3 WS_COMM_DEL_SUCCESS CHAR(1),
+           3 WS_COMM_DEL_FAIL_CD CHAR(1),
+           3 WS_COMM_UPDATE     CHAR(1);
+
+   /* --------------------------------------------------------------- */
+   /*  Incoming COMMAREA (LINKAGE SECTION DFHCOMMAREA)                */
+   /* --------------------------------------------------------------- */
+   DCL COMMAREA_PTR          POINTER;
+   DCL 1 DFHCOMMAREA BASED(COMMAREA_PTR),
+         2 COMM_TERM            FIXED BIN(31),
+         2 COMM_REST,
+           3 COMM_EYE           CHAR(4),
+           3 COMM_SCODE         CHAR(6),
+           3 COMM_CUSTNO        CHAR(10),
+           3 COMM_TITLE         CHAR(10),
+           3 COMM_FIRST_NAME    CHAR(50),
+           3 COMM_LAST_NAME     CHAR(50),
+           3 COMM_DOB           CHAR(8),
+           3 COMM_PHONE         CHAR(20),
+           3 COMM_ADDR_LINE1    CHAR(50),
+           3 COMM_ADDR_LINE2    CHAR(50),
+           3 COMM_CITY          CHAR(50),
+           3 COMM_POSTCODE      CHAR(10),
+           3 COMM_COUNTRY       CHAR(50),
+           3 COMM_STATUS        CHAR(10),
+           3 COMM_CREATED_DATE  CHAR(8),
+           3 COMM_CREDIT_SCORE  CHAR(3),
+           3 COMM_CS_REVIEW_DATE CHAR(8),
+           3 COMM_DEL_SUCCESS   CHAR(1),
+           3 COMM_DEL_FAIL_CD   CHAR(1),
+           3 COMM_UPD           CHAR(1);
+
+   /* =============================================================== */
+   /*  MAIN LOGIC (PREMIERE SECTION / A010)                           */
+   /* =============================================================== */
+
+   /* Set up the abend handling */
+   EXEC CICS HANDLE ABEND LABEL(ABEND_HANDLING) ;
+
+   /* Get the COMMAREA address */
+   EXEC CICS ADDRESS
+        COMMAREA(COMMAREA_PTR)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   SELECT;
+
+     /* First time through - send map with erased data fields */
+     WHEN (EIBCALEN = 0) DO;
+       BNK1DCI_ALL = LOW(577);
+       CUSTNOL = -1;
+       SEND_FLAG = SEND_ERASE_C;
+       WS_COMM_TERM = 0;
+       WS_COMM_REST = ' ';
+
+       CALL STORE_TERM_DEF;
+
+       WS_COMM_TERM = STORED_UCTRANS;
+
+       CALL SEND_MAP;
+     END;
+
+     /* PA key pressed - just carry on */
+     WHEN (EIBAID = DFHPA1 | EIBAID = DFHPA2 | EIBAID = DFHPA3) DO;
+       ;
+     END;
+
+     /* PF3 - return to the main menu */
+     WHEN (EIBAID = DFHPF3) DO;
+       CALL RESTORE_TERM_DEF;
+
+       EXEC CICS RETURN
+            TRANSID('OMEN')
+            IMMEDIATE
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+     END;
+
+     /* PF5 - delete customer record */
+     WHEN (EIBAID = DFHPF5) DO;
+       CALL PROCESS_MAP;
+     END;
+
+     /* PF10 - update customer record */
+     WHEN (EIBAID = DFHPF10) DO;
+       CALL PROCESS_MAP;
+     END;
+
+     /* PF12 - termination message (DFHAID group test never true) */
+     WHEN (EIBAID = DFHPF12) DO;
+       CALL RESTORE_TERM_DEF;
+
+       CALL SEND_TERMINATION_MSG;
+
+       EXEC CICS RETURN ;
+     END;
+
+     /* CLEAR pressed */
+     WHEN (EIBAID = DFHCLEAR) DO;
+       CALL RESTORE_TERM_DEF;
+
+       EXEC CICS SEND CONTROL
+            ERASE
+            FREEKB ;
+
+       EXEC CICS RETURN ;
+     END;
+
+     /* ENTER pressed - process the content */
+     WHEN (EIBAID = DFHENTER) DO;
+       CALL PROCESS_MAP;
+     END;
+
+     /* Anything else - invalid key message */
+     OTHERWISE DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Invalid key pressed.';
+       CUSTNOL = -1;
+       SEND_FLAG = SEND_DATAONLY_ALARM_C;
+       CALL SEND_MAP;
+     END;
+
+   END;
+
+   /* Not first time through - set the return information */
+   IF EIBCALEN ^= 0 THEN DO;
+     WS_COMM_TERM         = DFHCOMMAREA.COMM_TERM;
+     STORED_UCTRANS       = DFHCOMMAREA.COMM_TERM;
+     WS_COMM_EYE          = DFHCOMMAREA.COMM_EYE;
+     WS_COMM_SCODE        = DFHCOMMAREA.COMM_SCODE;
+     WS_COMM_CUSTNO       = DFHCOMMAREA.COMM_CUSTNO;
+     WS_COMM_TITLE        = DFHCOMMAREA.COMM_TITLE;
+     WS_COMM_FIRST_NAME   = DFHCOMMAREA.COMM_FIRST_NAME;
+     WS_COMM_LAST_NAME    = DFHCOMMAREA.COMM_LAST_NAME;
+     WS_COMM_PHONE        = DFHCOMMAREA.COMM_PHONE;
+     WS_COMM_ADDR_LINE1   = DFHCOMMAREA.COMM_ADDR_LINE1;
+     WS_COMM_ADDR_LINE2   = DFHCOMMAREA.COMM_ADDR_LINE2;
+     WS_COMM_CITY         = DFHCOMMAREA.COMM_CITY;
+     WS_COMM_POSTCODE     = DFHCOMMAREA.COMM_POSTCODE;
+     WS_COMM_COUNTRY      = DFHCOMMAREA.COMM_COUNTRY;
+     WS_COMM_STATUS       = DFHCOMMAREA.COMM_STATUS;
+     WS_COMM_CREATED_DATE = DFHCOMMAREA.COMM_CREATED_DATE;
+     WS_COMM_DOB          = DFHCOMMAREA.COMM_DOB;
+     WS_COMM_CREDIT_SCORE = DFHCOMMAREA.COMM_CREDIT_SCORE;
+     WS_COMM_CS_REVIEW_DATE = DFHCOMMAREA.COMM_CS_REVIEW_DATE;
+     WS_COMM_UPDATE       = DFHCOMMAREA.COMM_UPD;
+   END;
+
+   WS_CA_LEN = SIZE(WS_COMM_AREA);
+   EXEC CICS RETURN TRANSID('ODCS')
+        COMMAREA(WS_COMM_AREA)
+        LENGTH(WS_CA_LEN)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+     CALL BUILD_ABEND_INFO('A010 - RETURN TRANSID(ODCS) FAIL');
+     WS_CICS_FAIL_MSG =
+       'BNK1DCS - A010 - RETURN TRANSID(ODCS) FAIL';
+     WS_CICS_RESP_DISP  = SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+     WS_CICS_RESP2_DISP = SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+
+     CALL RESTORE_TERM_DEF;
+     CALL ABEND_THIS_TASK;
+   END;
+
+   /* =============================================================== */
+   /*  PROCESS_MAP (PROCESS-MAP SECTION)                              */
+   /* =============================================================== */
+   PROCESS_MAP: PROCEDURE;
+
+     CALL RECEIVE_MAP;
+
+     /* ENTER on its own (not an update) - validate and get data */
+     IF EIBAID = DFHENTER & DFHCOMMAREA.COMM_UPD ^= 'Y' THEN DO;
+       CUSTNOL = -1;
+
+       CALL EDIT_DATA;
+
+       IF VALID_DATA_SW = 'Y' THEN
+         CALL GET_CUST_DATA;
+       ELSE
+         INQCUST_COMMAREA = '';
+     END;
+
+     /* ENTER with the UPDATE flag set - validate and update */
+     IF EIBAID = DFHENTER & DFHCOMMAREA.COMM_UPD = 'Y' THEN DO;
+       CALL EDIT_DATA2;
+
+       IF VALID_DATA_SW = 'Y' THEN
+         CALL UPDATE_CUST_DATA;
+     END;
+
+     /* PF5 - delete customer */
+     IF EIBAID = DFHPF5 THEN DO;
+       CALL EDIT_DATA;
+       CALL VALIDATE_DATA;
+
+       IF VALID_DATA_SW = 'Y' THEN
+         CALL DEL_CUST_DATA;
+       CUSTNOL = -1;
+     END;
+
+     /* PF10 - unlock the fields to allow an update */
+     IF EIBAID = DFHPF10 THEN DO;
+       CALL EDIT_DATA;
+       CALL VALIDATE_DATA;
+
+       IF VALID_DATA_SW = 'Y' THEN DO;
+         CALL UNPROT_CUST_DATA;
+         MESSAGEO = ' ';
+         MESSAGEO = 'Amend data then press <ENTER>.' || ' ';
+       END;
+     END;
+
+     SEND_FLAG = SEND_DATAONLY_ALARM_C;
+     CALL SEND_MAP;
+
+   END PROCESS_MAP;
+
+   /* =============================================================== */
+   /*  RECEIVE_MAP (RECEIVE-MAP SECTION)                              */
+   /* =============================================================== */
+   RECEIVE_MAP: PROCEDURE;
+
+     /* Turn off upper case translation before the receive */
+     EXEC CICS INQUIRE
+          TERMINAL(EIBTRMID)
+          UCTRANST(WS_UCTRANS)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+
+     IF WS_UCTRANS = DFHVALUE(UCTRAN) |
+        WS_UCTRANS = DFHVALUE(TRANIDONLY) THEN DO;
+
+       WS_UCTRANS = DFHVALUE(NOUCTRAN);
+
+       EXEC CICS SET TERMINAL(EIBTRMID)
+            UCTRANST(WS_UCTRANS)
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         CALL BUILD_ABEND_INFO(
+           'RM010 (1) - SET TERMINAL UC FAIL ');
+         CALL SET_FAIL_INFO(
+           'BNK1DCS - RM010 (1) - SET TERMINAL UC FAIL ');
+         CALL RESTORE_TERM_DEF;
+         CALL ABEND_THIS_TASK;
+       END;
+     END;
+
+     /* RECEIVE map ASIS */
+     EXEC CICS RECEIVE MAP('BNK1DC')
+          MAPSET('BNK1DCM')
+          INTO(BNK1DCI)
+          TERMINAL
+          ASIS
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       CALL BUILD_ABEND_INFO('RM010 - RECEIVE MAP FAIL ');
+       CALL SET_FAIL_INFO('BNK1DCS - RM010 - RECEIVE MAP FAIL ');
+       CALL RESTORE_TERM_DEF;
+       CALL ABEND_THIS_TASK;
+     END;
+
+     INQCUST_CUSTNO = CUSTNOI;
+     INQCUST_SCODE  = SORTCI;
+
+   END RECEIVE_MAP;
+
+   /* =============================================================== */
+   /*  EDIT_DATA (EDIT-DATA SECTION)                                  */
+   /* =============================================================== */
+   EDIT_DATA: PROCEDURE;
+
+     IF CUSTNOL = 0 | CUSTNOI = LOW(10) THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Please enter a customer number.';
+       VALID_DATA_SW = 'N';
+       CUSTNOL = -1;
+       RETURN;
+     END;
+
+     EXEC CICS BIF DEEDIT FIELD(CUSTNOI) ;
+
+     IF VERIFY(CUSTNOI, '0123456789') ^= 0 THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Please enter a customer number.';
+       VALID_DATA_SW = 'N';
+       CUSTNOL = -1;
+     END;
+
+   END EDIT_DATA;
+
+   /* =============================================================== */
+   /*  EDIT_DATA2 (EDIT-DATA2 SECTION)                                */
+   /* =============================================================== */
+   EDIT_DATA2: PROCEDURE;
+
+     /* The title must be a valid title */
+     WS_UNSTR_TITLE = CUSTTITLI;
+     WS_TITLE_VALID = ' ';
+
+     SELECT (WS_UNSTR_TITLE);
+       WHEN ('Professor') WS_TITLE_VALID = 'Y';
+       WHEN ('Mr       ') WS_TITLE_VALID = 'Y';
+       WHEN ('Mrs      ') WS_TITLE_VALID = 'Y';
+       WHEN ('Miss     ') WS_TITLE_VALID = 'Y';
+       WHEN ('Ms       ') WS_TITLE_VALID = 'Y';
+       WHEN ('Dr       ') WS_TITLE_VALID = 'Y';
+       WHEN ('Drs      ') WS_TITLE_VALID = 'Y';
+       WHEN ('Lord     ') WS_TITLE_VALID = 'Y';
+       WHEN ('Sir      ') WS_TITLE_VALID = 'Y';
+       WHEN ('Lady     ') WS_TITLE_VALID = 'Y';
+       OTHERWISE WS_TITLE_VALID = 'N';
+     END;
+
+     IF WS_TITLE_VALID = 'N' THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO =
+         'Valid titles are: Mr,Mrs,Miss,Ms,Dr,Professor,' ||
+         'Drs,Lord,Sir,Lady';
+       VALID_DATA_SW = 'N';
+       CUSTTITLL = -1;
+     END;
+
+     /* The address must not be all spaces */
+     IF CUSTAD1I = ' ' & CUSTAD2I = ' ' & CUSTCITYI = ' ' THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Address must not be all spaces' ||
+                  ' - please reenter';
+       VALID_DATA_SW = 'N';
+       CUSTAD1L = -1;
+     END;
+
+   END EDIT_DATA2;
+
+   /* =============================================================== */
+   /*  VALIDATE_DATA (VALIDATE-DATA SECTION)                          */
+   /* =============================================================== */
+   VALIDATE_DATA: PROCEDURE;
+
+     IF INQCUST_SCODE = '000000' THEN DO;
+       VALID_DATA_SW = 'N';
+       MESSAGEO = ' ';
+       MESSAGEO = 'The Sort code / Customer number combination is' ||
+                  ' not VALID.';
+     END;
+
+     IF CUSTNOI = '0000000000' | CUSTNOI = '9999999999' THEN DO;
+       VALID_DATA_SW = 'N';
+       MESSAGEO = ' ';
+       MESSAGEO = 'The customer number is' || ' not VALID.';
+     END;
+
+   END VALIDATE_DATA;
+
+   /* =============================================================== */
+   /*  GET_CUST_DATA (GET-CUST-DATA SECTION)                          */
+   /* =============================================================== */
+   GET_CUST_DATA: PROCEDURE;
+
+     INQCUST_COMMAREA = '';
+     INQCUST_CUSTNO = CUSTNOI;
+
+     EXEC CICS LINK
+          PROGRAM('INQCUST')
+          COMMAREA(INQCUST_COMMAREA)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2)
+          SYNCONRETURN ;
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       CALL BUILD_ABEND_INFO('GCD010 - LINK INQCUST  FAIL ');
+       CALL SET_FAIL_INFO(
+         'BNK1DCS - GCD010 - LINK INQCUST  FAIL      ');
+       CALL RESTORE_TERM_DEF;
+       CALL ABEND_THIS_TASK;
+     END;
+
+     /* Was any data returned? */
+     IF INQCUST_FIRST_NAME = ' ' & INQCUST_LAST_NAME = ' ' &
+        INQCUST_ADDR_LINE1 = ' ' THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Sorry, but that customer number was not found.';
+       VALID_DATA_SW = 'N';
+       SORTCO    = ' ';
+       CUSTNO2O  = ' ';
+       CUSTTITLO = ' ';
+       CUSTFNAMO = ' ';
+       CUSTLNAMO = ' ';
+       CUSTAD1O  = ' ';
+       CUSTAD2O  = ' ';
+       CUSTCITYO = ' ';
+       CUSTPOSTO = ' ';
+       CUSTCTRYO = ' ';
+       DOBDDO    = ' ';
+       DOBMMO    = ' ';
+       DOBYYO    = ' ';
+       CREDSCO   = ' ';
+       SCRDTDDO  = ' ';
+       SCRDTMMO  = ' ';
+       SCRDTYYO  = ' ';
+       CUSTNOL   = -1;
+       RETURN;
+     END;
+
+     /* Set the values on the map */
+     SORTCO    = INQCUST_SCODE;
+     CUSTNO2O  = INQCUST_CUSTNO;
+     CUSTTITLO = INQCUST_TITLE;
+     CUSTFNAMO = INQCUST_FIRST_NAME;
+     CUSTLNAMO = INQCUST_LAST_NAME;
+
+     CUSTAD1O  = INQCUST_ADDR_LINE1;
+     CUSTAD2O  = INQCUST_ADDR_LINE2;
+     CUSTCITYO = INQCUST_CITY;
+     CUSTPOSTO = INQCUST_POSTCODE;
+     CUSTCTRYO = INQCUST_COUNTRY;
+
+     COMM_DOB_SPLIT_DD   = INQCUST_DOB_DD;
+     COMM_DOB_SPLIT_MM   = INQCUST_DOB_MM;
+     COMM_DOB_SPLIT_YYYY = INQCUST_DOB_YYYY;
+     DOBDDO = COMM_DOB_SPLIT_DD;
+     DOBMMO = COMM_DOB_SPLIT_MM;
+     DOBYYO = COMM_DOB_SPLIT_YYYY;
+
+     CREDIT_SCORE_9 = INQCUST_CREDIT_SCORE;
+     CREDIT_SCORE_X = CREDIT_SCORE_9;
+     CREDSCO = CREDIT_SCORE_X;
+
+     SCRDTDDO = INQCUST_CS_REVIEW_DD;
+     SCRDTMMO = INQCUST_CS_REVIEW_MM;
+     SCRDTYYO = INQCUST_CS_REVIEW_YYYY;
+
+     MESSAGEO = ' ';
+     IF CUSTNOI = '0000000000' | CUSTNOI = '9999999999' THEN
+       MESSAGEO = 'Customer lookup successful.';
+     ELSE
+       MESSAGEO =
+         'Customer lookup successful. <PF5> to Delete. <PF10' ||
+         '> to Update.                       ';
+
+   END GET_CUST_DATA;
+
+   /* =============================================================== */
+   /*  DEL_CUST_DATA (DEL-CUST-DATA SECTION)                          */
+   /* =============================================================== */
+   DEL_CUST_DATA: PROCEDURE;
+
+     DELCUS_COMMAREA = '';
+     DELCUS_COMMAREA.COMM_SCODE  = SORTCI;
+     DELCUS_COMMAREA.COMM_CUSTNO = CUSTNO2I;
+
+     EXEC CICS LINK
+          PROGRAM('DELCUS')
+          COMMAREA(DELCUS_COMMAREA)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2)
+          SYNCONRETURN ;
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       CALL BUILD_ABEND_INFO('DCD010 - LINK DELCUS  FAIL ');
+       CALL SET_FAIL_INFO(
+         'BNK1DCS - DCD010 - LINK DELCUS  FAIL      ');
+       CALL RESTORE_TERM_DEF;
+       CALL ABEND_THIS_TASK;
+     END;
+
+     /* Check the outcome of the delete */
+     IF DELCUS_COMMAREA.COMM_DEL_SUCCESS = 'N' &
+        DELCUS_COMMAREA.COMM_DEL_FAIL_CD = '1' THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Sorry but that Cust no was not found.' ||
+                  ' Customer NOT deleted.';
+       VALID_DATA_SW = 'N';
+       CUSTNO2L = -1;
+       SORTCO = DELCUS_COMMAREA.COMM_SCODE;
+       RETURN;
+     END;
+
+     IF DELCUS_COMMAREA.COMM_DEL_SUCCESS = 'N' &
+        DELCUS_COMMAREA.COMM_DEL_FAIL_CD = '2' THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Sorry but a datastore error occurred.' ||
+                  ' Action NOT applied.  ';
+       VALID_DATA_SW = 'N';
+       SORTCO = DELCUS_COMMAREA.COMM_SCODE;
+       RETURN;
+     END;
+
+     IF DELCUS_COMMAREA.COMM_DEL_SUCCESS = 'N' &
+        DELCUS_COMMAREA.COMM_DEL_FAIL_CD = '3' THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Sorry but a delete error occurred.' ||
+                  ' Customer NOT deleted.';
+       VALID_DATA_SW = 'N';
+       SORTCO = DELCUS_COMMAREA.COMM_SCODE;
+       RETURN;
+     END;
+
+     IF DELCUS_COMMAREA.COMM_DEL_SUCCESS = 'N' THEN DO;
+       MESSAGEO = ' ';
+       MESSAGEO = 'Sorry but an error occurred.' ||
+                  ' Customer NOT deleted.';
+       VALID_DATA_SW = 'N';
+       SORTCO = DELCUS_COMMAREA.COMM_SCODE;
+       RETURN;
+     END;
+
+     /* Blank the map data */
+     SORTCO    = ' ';
+     CUSTNO2O  = ' ';
+     CUSTTITLO = ' ';
+     CUSTFNAMO = ' ';
+     CUSTLNAMO = ' ';
+     CUSTAD1O  = ' ';
+     CUSTAD2O  = ' ';
+     CUSTCITYO = ' ';
+     CUSTPOSTO = ' ';
+     CUSTCTRYO = ' ';
+     DOBDDO    = ' ';
+     DOBMMO    = ' ';
+     DOBYYO    = ' ';
+     CREDSCO   = ' ';
+     SCRDTDDO  = ' ';
+     SCRDTMMO  = ' ';
+     SCRDTYYO  = ' ';
+
+     MESSAGEO = ' ';
+     MESSAGEO = 'Customer ' || DELCUS_COMMAREA.COMM_CUSTNO ||
+                ' and associated accounts were successfully' ||
+                ' deleted.';
+
+   END DEL_CUST_DATA;
+
+   /* =============================================================== */
+   /*  UPDATE_CUST_DATA (UPDATE-CUST-DATA SECTION)                    */
+   /* =============================================================== */
+   UPDATE_CUST_DATA: PROCEDURE;
+
+     UPDCUST_COMMAREA = '';
+     UPDCUST_COMMAREA.COMM_EYE    = 'CUST';
+     UPDCUST_COMMAREA.COMM_SCODE  = SORTCI;
+     UPDCUST_COMMAREA.COMM_CUSTNO = CUSTNO2I;
+
+     /* Name and address come straight from the screen input */
+     UPDCUST_COMMAREA.COMM_TITLE      = CUSTTITLI;
+     UPDCUST_COMMAREA.COMM_FIRST_NAME = CUSTFNAMI;
+     UPDCUST_COMMAREA.COMM_LAST_NAME  = CUSTLNAMI;
+
+     UPDCUST_COMMAREA.COMM_ADDR_LINE1 = CUSTAD1I;
+     UPDCUST_COMMAREA.COMM_ADDR_LINE2 = CUSTAD2I;
+     UPDCUST_COMMAREA.COMM_CITY       = CUSTCITYI;
+     UPDCUST_COMMAREA.COMM_POSTCODE   = CUSTPOSTI;
+     UPDCUST_COMMAREA.COMM_COUNTRY    = CUSTCTRYI;
+
+     COMM_DOBX_DD   = DOBDDI;
+     COMM_DOBX_MM   = DOBMMI;
+     COMM_DOBX_YYYY = DOBYYI;
+     UPDCUST_COMMAREA.COMM_DOB_DAY   = COMM_DOBX_DD;
+     UPDCUST_COMMAREA.COMM_DOB_MONTH = COMM_DOBX_MM;
+     UPDCUST_COMMAREA.COMM_DOB_YEAR  = COMM_DOBX_YYYY;
+     CREDIT_SCORE_X = CREDSCI;
+     CREDIT_SCORE_9 = CREDIT_SCORE_X;
+     UPDCUST_COMMAREA.COMM_CREDIT_SCORE = CREDIT_SCORE_9;
+
+     COMM_CS_REVIEWX_DD   = SCRDTDDI;
+     COMM_CS_REVIEWX_MM   = SCRDTMMI;
+     COMM_CS_REVIEWX_YYYY = SCRDTYYI;
+     UPDCUST_COMMAREA.COMM_CS_REVIEW_DAY   = COMM_CS_REVIEWX_DD;
+     UPDCUST_COMMAREA.COMM_CS_REVIEW_MONTH = COMM_CS_REVIEWX_MM;
+     UPDCUST_COMMAREA.COMM_CS_REVIEW_YEAR  = COMM_CS_REVIEWX_YYYY;
+
+     UPDCUST_COMMAREA.COMM_UPD_SUCCESS = ' ';
+     UPDCUST_COMMAREA.COMM_UPD_FAIL_CD = ' ';
+
+     EXEC CICS LINK
+          PROGRAM('UPDCUST')
+          COMMAREA(UPDCUST_COMMAREA)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2)
+          SYNCONRETURN ;
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       CALL BUILD_ABEND_INFO('UAPDC010 - LINK UPDCUST  FAIL');
+       CALL SET_FAIL_INFO(
+         'BNK1DCS - UPDCD010 - LINK UPDCUST  FAIL    ');
+       CALL RESTORE_TERM_DEF;
+       CALL ABEND_THIS_TASK;
+     END;
+
+     /* Check the outcome of the update */
+     IF UPDCUST_COMMAREA.COMM_UPD_SUCCESS = 'N' THEN DO;
+
+       SELECT (UPDCUST_COMMAREA.COMM_UPD_FAIL_CD);
+         WHEN ('1') DO;
+           MESSAGEO = ' ';
+           MESSAGEO = 'Sorry but that Cust no was not found.' ||
+                      ' Customer NOT updated.';
+           VALID_DATA_SW = 'N';
+           CUSTNO2L = -1;
+           SORTCO = UPDCUST_COMMAREA.COMM_SCODE;
+           RETURN;
+         END;
+         WHEN ('2') DO;
+           MESSAGEO = ' ';
+           MESSAGEO = 'Sorry but a datastore error occurred.' ||
+                      ' Customer NOT updated.';
+           VALID_DATA_SW = 'N';
+           CUSTNO2L = -1;
+           SORTCO = UPDCUST_COMMAREA.COMM_SCODE;
+           RETURN;
+         END;
+         WHEN ('3') DO;
+           MESSAGEO = ' ';
+           MESSAGEO = 'Sorry but an update error occurred.' ||
+                      ' Customer NOT updated.';
+           VALID_DATA_SW = 'N';
+           SORTCO = UPDCUST_COMMAREA.COMM_SCODE;
+           CUSTNO2L = -1;
+           RETURN;
+         END;
+         WHEN ('T') DO;
+           MESSAGEO = ' ';
+           MESSAGEO = 'Sorry but the title is invalid.' ||
+                      ' Customer NOT updated.';
+           VALID_DATA_SW = 'N';
+           SORTCO = UPDCUST_COMMAREA.COMM_SCODE;
+           CUSTNO2L = -1;
+           RETURN;
+         END;
+         OTHERWISE DO;
+           MESSAGEO = ' ';
+           MESSAGEO = 'Sorry but an unknown error occurred.' ||
+                      ' Customer NOT updated.';
+           VALID_DATA_SW = 'N';
+           SORTCO = UPDCUST_COMMAREA.COMM_SCODE;
+           CUSTNO2L = -1;
+           RETURN;
+         END;
+       END;
+
+     END;
+
+     /* Set up the map data */
+     CALL MAP_FROM_UPDCUST;
+
+     MESSAGEO = ' ';
+     MESSAGEO = 'Customer ' || UPDCUST_COMMAREA.COMM_CUSTNO ||
+                ' was updated successfully';
+     CUSTNOL = -1;
+     CALL PROT_CUST_DATA;
+
+   END UPDATE_CUST_DATA;
+
+   /* =============================================================== */
+   /*  MAP_FROM_UPDCUST (shared map fill from UPDCUST commarea)       */
+   /* =============================================================== */
+   MAP_FROM_UPDCUST: PROCEDURE;
+
+     SORTCO    = UPDCUST_COMMAREA.COMM_SCODE;
+     CUSTNO2O  = UPDCUST_COMMAREA.COMM_CUSTNO;
+     CUSTTITLO = UPDCUST_COMMAREA.COMM_TITLE;
+     CUSTFNAMO = UPDCUST_COMMAREA.COMM_FIRST_NAME;
+     CUSTLNAMO = UPDCUST_COMMAREA.COMM_LAST_NAME;
+
+     CUSTAD1O  = UPDCUST_COMMAREA.COMM_ADDR_LINE1;
+     CUSTAD2O  = UPDCUST_COMMAREA.COMM_ADDR_LINE2;
+     CUSTCITYO = UPDCUST_COMMAREA.COMM_CITY;
+     CUSTPOSTO = UPDCUST_COMMAREA.COMM_POSTCODE;
+     CUSTCTRYO = UPDCUST_COMMAREA.COMM_COUNTRY;
+
+     COMM_DOB_SPLIT_DD   = UPDCUST_COMMAREA.COMM_DOB_DAY;
+     COMM_DOB_SPLIT_MM   = UPDCUST_COMMAREA.COMM_DOB_MONTH;
+     COMM_DOB_SPLIT_YYYY = UPDCUST_COMMAREA.COMM_DOB_YEAR;
+     DOBDDO = COMM_DOB_SPLIT_DD;
+     DOBMMO = COMM_DOB_SPLIT_MM;
+     DOBYYO = COMM_DOB_SPLIT_YYYY;
+
+     CREDIT_SCORE_9 = UPDCUST_COMMAREA.COMM_CREDIT_SCORE;
+     CREDIT_SCORE_X = CREDIT_SCORE_9;
+     CREDSCO = CREDIT_SCORE_X;
+
+     SCRDTDDO = UPDCUST_COMMAREA.COMM_CS_REVIEW_DAY;
+     SCRDTMMO = UPDCUST_COMMAREA.COMM_CS_REVIEW_MONTH;
+     SCRDTYYO = UPDCUST_COMMAREA.COMM_CS_REVIEW_YEAR;
+
+   END MAP_FROM_UPDCUST;
+
+   /* =============================================================== */
+   /*  UNPROT_CUST_DATA (UNPROT-CUST-DATA SECTION)                    */
+   /* =============================================================== */
+   UNPROT_CUST_DATA: PROCEDURE;
+
+     /* Preserve the information on the screen in the comm area */
+     DFHCOMMAREA.COMM_EYE        = 'CUST';
+     DFHCOMMAREA.COMM_SCODE      = SORTCO;
+     DFHCOMMAREA.COMM_CUSTNO     = CUSTNO2O;
+     DFHCOMMAREA.COMM_TITLE      = CUSTTITLO;
+     DFHCOMMAREA.COMM_FIRST_NAME = CUSTFNAMO;
+     DFHCOMMAREA.COMM_LAST_NAME  = CUSTLNAMO;
+
+     DFHCOMMAREA.COMM_ADDR_LINE1 = CUSTAD1O;
+     DFHCOMMAREA.COMM_ADDR_LINE2 = CUSTAD2O;
+     DFHCOMMAREA.COMM_CITY       = CUSTCITYO;
+     DFHCOMMAREA.COMM_POSTCODE   = CUSTPOSTO;
+     DFHCOMMAREA.COMM_COUNTRY    = CUSTCTRYO;
+
+     COMM_DOBX_DD   = DOBDDO;
+     COMM_DOBX_MM   = DOBMMO;
+     COMM_DOBX_YYYY = DOBYYO;
+     DFHCOMMAREA.COMM_DOB = COMM_DOBX_DD || COMM_DOBX_MM ||
+                            COMM_DOBX_YYYY;
+
+     CREDIT_SCORE_X = CREDSCO;
+     DFHCOMMAREA.COMM_CREDIT_SCORE = CREDIT_SCORE_X;
+
+     COMM_CS_REVIEWX_DD   = SCRDTDDO;
+     COMM_CS_REVIEWX_MM   = SCRDTMMO;
+     COMM_CS_REVIEWX_YYYY = SCRDTYYO;
+     DFHCOMMAREA.COMM_CS_REVIEW_DATE = COMM_CS_REVIEWX_DD ||
+         COMM_CS_REVIEWX_MM || COMM_CS_REVIEWX_YYYY;
+
+     /* Flag that this is preserved UPDATE data */
+     DFHCOMMAREA.COMM_UPD = 'Y';
+
+     /* Allow editing of name and address fields */
+     CUSTTITLC = DFHGREEN;
+     CUSTTITLA = 'A';
+     CUSTTITLH = DFHUNDLN;
+
+     CUSTFNAMC = DFHGREEN;
+     CUSTFNAMA = 'A';
+     CUSTFNAMH = DFHUNDLN;
+
+     CUSTLNAMC = DFHGREEN;
+     CUSTLNAMA = 'A';
+     CUSTLNAMH = DFHUNDLN;
+
+     /* Position the cursor at the title field */
+     CUSTTITLL = -1;
+
+     CUSTAD1C = DFHGREEN;
+     CUSTAD1A = 'A';
+     CUSTAD1H = DFHUNDLN;
+
+     CUSTAD2C = DFHGREEN;
+     CUSTAD2A = 'A';
+     CUSTAD2H = DFHUNDLN;
+
+     CUSTCITYC = DFHGREEN;
+     CUSTCITYA = 'A';
+     CUSTCITYH = DFHUNDLN;
+
+     CUSTPOSTC = DFHGREEN;
+     CUSTPOSTA = 'A';
+     CUSTPOSTH = DFHUNDLN;
+
+     CUSTCTRYC = DFHGREEN;
+     CUSTCTRYA = 'A';
+     CUSTCTRYH = DFHUNDLN;
+
+     /* Protect the Customer Number field, neutral, no underscore */
+     CUSTNOA = DFHBMASK;
+     CUSTNOC = DFHNEUTR;
+     CUSTNOH = HIGH(1);
+
+   END UNPROT_CUST_DATA;
+
+   /* =============================================================== */
+   /*  PROT_CUST_DATA (PROT-CUST-DATA SECTION)                        */
+   /* =============================================================== */
+   PROT_CUST_DATA: PROCEDURE;
+
+     CALL MAP_FROM_UPDCUST;
+     COMM_DOBX_DD   = DOBDDO;
+     COMM_DOBX_MM   = DOBMMO;
+     COMM_DOBX_YYYY = DOBYYO;
+
+     DFHCOMMAREA.COMM_EYE        = 'CUST';
+     DFHCOMMAREA.COMM_SCODE      = SORTCO;
+     DFHCOMMAREA.COMM_CUSTNO     = CUSTNO2O;
+     DFHCOMMAREA.COMM_FIRST_NAME =
+         UPDCUST_COMMAREA.COMM_FIRST_NAME;
+     DFHCOMMAREA.COMM_LAST_NAME  =
+         UPDCUST_COMMAREA.COMM_LAST_NAME;
+
+     DFHCOMMAREA.COMM_ADDR_LINE1 = CUSTAD1O;
+     DFHCOMMAREA.COMM_ADDR_LINE2 = CUSTAD2O;
+     DFHCOMMAREA.COMM_CITY       = CUSTCITYO;
+     DFHCOMMAREA.COMM_POSTCODE   = CUSTPOSTO;
+     DFHCOMMAREA.COMM_COUNTRY    = CUSTCTRYO;
+
+     DFHCOMMAREA.COMM_DOB = COMM_DOBX_DD || COMM_DOBX_MM ||
+                            COMM_DOBX_YYYY;
+
+     CREDIT_SCORE_X = CREDSCO;
+     DFHCOMMAREA.COMM_CREDIT_SCORE = CREDIT_SCORE_X;
+
+     COMM_CS_REVIEWX_DD   = SCRDTDDO;
+     COMM_CS_REVIEWX_MM   = SCRDTMMO;
+     COMM_CS_REVIEWX_YYYY = SCRDTYYO;
+     DFHCOMMAREA.COMM_CS_REVIEW_DATE = COMM_CS_REVIEWX_DD ||
+         COMM_CS_REVIEWX_MM || COMM_CS_REVIEWX_YYYY;
+
+     /* Flag that the update has been applied */
+     DFHCOMMAREA.COMM_UPD = 'N';
+
+     /* Protect the fields again */
+     CUSTNO2C = DFHNEUTR;
+     CUSTNO2A = DFHBMPRF;
+
+     CUSTTITLC = DFHNEUTR;
+     CUSTTITLA = DFHBMPRF;
+     CUSTTITLH = HIGH(1);
+
+     CUSTFNAMC = DFHNEUTR;
+     CUSTFNAMA = DFHBMPRF;
+     CUSTFNAMH = HIGH(1);
+
+     CUSTLNAMC = DFHNEUTR;
+     CUSTLNAMA = DFHBMPRF;
+     CUSTLNAMH = HIGH(1);
+
+     /* Position the cursor at the customer number */
+     CUSTNOL = -1;
+
+     CUSTAD1C = DFHNEUTR;
+     CUSTAD1A = DFHBMPRF;
+     CUSTAD1H = HIGH(1);
+
+     CUSTAD2C = DFHNEUTR;
+     CUSTAD2A = DFHBMPRF;
+     CUSTAD2H = HIGH(1);
+
+     CUSTCITYC = DFHNEUTR;
+     CUSTCITYA = DFHBMPRF;
+     CUSTCITYH = HIGH(1);
+
+     CUSTPOSTC = DFHNEUTR;
+     CUSTPOSTA = DFHBMPRF;
+     CUSTPOSTH = HIGH(1);
+
+     CUSTCTRYC = DFHNEUTR;
+     CUSTCTRYA = DFHBMPRF;
+     CUSTCTRYH = HIGH(1);
+
+     /* Customer Number field editable again, green, underscore */
+     CUSTNOA = DFHBMFSE;
+     CUSTNOC = DFHGREEN;
+     CUSTNOH = DFHUNDLN;
+     CUSTNOO = UPDCUST_COMMAREA.COMM_CUSTNO;
+     CUSTNO2O = UPDCUST_COMMAREA.COMM_CUSTNO;
+
+   END PROT_CUST_DATA;
+
+   /* =============================================================== */
+   /*  SEND_MAP (SEND-MAP SECTION)                                    */
+   /* =============================================================== */
+   SEND_MAP: PROCEDURE;
+
+     /* SEND-ERASE */
+     IF SEND_FLAG = SEND_ERASE_C THEN DO;
+       EXEC CICS SEND MAP('BNK1DC')
+            MAPSET('BNK1DCM')
+            FROM(BNK1DCO)
+            ERASE
+            CURSOR
+            FREEKB
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         CALL BUILD_ABEND_INFO('SM010 - SEND MAP ERASE FAIL ');
+         CALL SET_FAIL_INFO(
+           'BNK1DCS - SM010 - SEND MAP ERASE FAIL ');
+         CALL RESTORE_TERM_DEF;
+         CALL ABEND_THIS_TASK;
+       END;
+       RETURN;
+     END;
+
+     /* SEND-DATAONLY */
+     IF SEND_FLAG = SEND_DATAONLY_C THEN DO;
+       EXEC CICS SEND MAP('BNK1DC')
+            MAPSET('BNK1DCM')
+            FROM(BNK1DCO)
+            DATAONLY
+            CURSOR
+            FREEKB
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         CALL BUILD_ABEND_INFO(
+           'SM010 - SEND MAP DATAONLY FAIL ');
+         CALL SET_FAIL_INFO(
+           'BNK1DCS - SM010 - SEND MAP DATAONLY FAIL ');
+         CALL RESTORE_TERM_DEF;
+         CALL ABEND_THIS_TASK;
+       END;
+       RETURN;
+     END;
+
+     /* SEND-DATAONLY-ALARM */
+     IF SEND_FLAG = SEND_DATAONLY_ALARM_C THEN DO;
+       EXEC CICS SEND MAP('BNK1DC')
+            MAPSET('BNK1DCM')
+            FROM(BNK1DCO)
+            DATAONLY
+            ALARM
+            CURSOR
+            FREEKB
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         CALL BUILD_ABEND_INFO(
+           'SM010 - SEND MAP DATAONLY ALARM FAIL ');
+         CALL SET_FAIL_INFO(
+           'BNK1DCS - SM010 - SEND MAP DATAONLY ALARM FAIL ');
+         CALL RESTORE_TERM_DEF;
+         CALL ABEND_THIS_TASK;
+       END;
+     END;
+
+   END SEND_MAP;
+
+   /* =============================================================== */
+   /*  STORE_TERM_DEF (STORE-TERM-DEF SECTION)                        */
+   /* =============================================================== */
+   STORE_TERM_DEF: PROCEDURE;
+
+     EXEC CICS INQUIRE
+          TERMINAL(EIBTRMID)
+          UCTRANST(WS_UCTRANS)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+
+     /* Store the original UCTRAN value */
+     STORED_UCTRANS = WS_UCTRANS;
+
+     IF WS_UCTRANS = DFHVALUE(UCTRAN) |
+        WS_UCTRANS = DFHVALUE(TRANIDONLY) THEN DO;
+
+       WS_UCTRANS = DFHVALUE(NOUCTRAN);
+
+       EXEC CICS SET TERMINAL(EIBTRMID)
+            UCTRANST(WS_UCTRANS)
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2) ;
+
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         CALL BUILD_ABEND_INFO('STD010 - SET TERMINAL UC FAIL ');
+         CALL SET_FAIL_INFO(
+           'BNK1DCS - STD010 - SET TERMINAL UC FAIL ');
+         CALL RESTORE_TERM_DEF;
+         CALL ABEND_THIS_TASK;
+       END;
+     END;
+
+   END STORE_TERM_DEF;
+
+   /* =============================================================== */
+   /*  RESTORE_TERM_DEF (RESTORE-TERM-DEF SECTION)                    */
+   /* =============================================================== */
+   RESTORE_TERM_DEF: PROCEDURE;
+
+     /* If STORED_UCTRANS is zero it was never set, skip restore */
+     IF STORED_UCTRANS = 0 THEN
+       RETURN;
+
+     WS_UCTRANS = STORED_UCTRANS;
+
+     EXEC CICS SET TERMINAL(EIBTRMID)
+          UCTRANST(WS_UCTRANS)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       CALL BUILD_ABEND_INFO('RTD010 - SET TERMINAL UC FAIL ');
+       CALL SET_FAIL_INFO(
+         'BNK1DCS - RTD010 - SET TERMINAL UC FAIL ');
+       CALL ABEND_THIS_TASK;
+     END;
+
+   END RESTORE_TERM_DEF;
+
+   /* =============================================================== */
+   /*  SEND_TERMINATION_MSG (SEND-TERMINATION-MSG SECTION)            */
+   /* =============================================================== */
+   SEND_TERMINATION_MSG: PROCEDURE;
+
+     EXEC CICS SEND TEXT
+          FROM(END_OF_SESSION_MESSAGE)
+          ERASE
+          FREEKB
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2) ;
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       CALL BUILD_ABEND_INFO('STM010 - SEND TEXT FAIL ');
+       CALL SET_FAIL_INFO('BNK1DCS - STM010 - SEND TEXT FAIL');
+       CALL RESTORE_TERM_DEF;
+       CALL ABEND_THIS_TASK;
+     END;
+
+   END SEND_TERMINATION_MSG;
+
+   /* =============================================================== */
+   /*  BUILD_ABEND_INFO (common ABNDINFO set-up and LINK ABNDPROC)    */
+   /* =============================================================== */
+   BUILD_ABEND_INFO: PROCEDURE(FREE_TEXT);
+
+     DCL FREE_TEXT CHAR(*);
+
+     ABNDINFO_REC = '';
+     ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE  = WS_ORIG_DATE;
+     ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE      = 'HBNK';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE  = '0';
+     ABND_FREEFORM = FREE_TEXT ||
+       'EIBRESP=' || ABND_RESPCODE ||
+       ' RESP2='  || ABND_RESP2CODE;
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+
+   END BUILD_ABEND_INFO;
+
+   /* =============================================================== */
+   /*  SET_FAIL_INFO (INITIALIZE WS-FAIL-INFO and fill the message)   */
+   /* =============================================================== */
+   SET_FAIL_INFO: PROCEDURE(FAIL_TEXT);
+
+     DCL FAIL_TEXT CHAR(*);
+
+     WS_CICS_FAIL_MSG   = FAIL_TEXT;
+     WS_CICS_RESP_DISP  = SUBSTR(CHAR(WS_CICS_RESP),  1, 10);
+     WS_CICS_RESP2_DISP = SUBSTR(CHAR(WS_CICS_RESP2), 1, 10);
+
+   END SET_FAIL_INFO;
+
+   /* =============================================================== */
+   /*  ABEND_THIS_TASK (ABEND-THIS-TASK SECTION)                      */
+   /* =============================================================== */
+   ABEND_THIS_TASK: PROCEDURE;
+
+     EXEC CICS ABEND ABCODE('HBNK') NODUMP CANCEL ;
+
+   END ABEND_THIS_TASK;
+
+   /* =============================================================== */
+   /*  POPULATE_TIME_DATE (POPULATE-TIME-DATE SECTION)                */
+   /* =============================================================== */
+   POPULATE_TIME_DATE: PROCEDURE;
+
+     EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+
+     EXEC CICS FORMATTIME
+          ABSTIME(WS_U_TIME)
+          DDMMYYYY(WS_ORIG_DATE)
+          TIME(WS_TIME_NOW)
+          DATESEP ;
+
+   END POPULATE_TIME_DATE;
+
+   /* =============================================================== */
+   /*  ABEND_HANDLING label (HANDLE ABEND target)                     */
+   /* =============================================================== */
+   ABEND_HANDLING:
+     CALL RESTORE_TERM_DEF;
+
+     EXEC CICS HANDLE ABEND CANCEL ;
+
+     CALL ABEND_THIS_TASK;
+
+ END BNK1DCS;

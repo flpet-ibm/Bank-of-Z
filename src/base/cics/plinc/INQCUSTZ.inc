@@ -1,0 +1,37 @@
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                         */
+ /*  INQCUSTZ.inc - Enquire Customer commarea                         */
+ /*  Mirrors INQCUSTZ.cpy                                             */
+ /* ----------------------------------------------------------------- */
+ DCL 1 INQCUST_COMMAREA,
+       2 INQCUST_EYE              CHAR(4),
+       2 INQCUST_SCODE            CHAR(6),
+       2 INQCUST_CUSTNO           CHAR(10),
+       2 INQCUST_NAME,
+         3 INQCUST_TITLE          CHAR(10),
+         3 INQCUST_FIRST_NAME     CHAR(50),
+         3 INQCUST_LAST_NAME      CHAR(50),
+       2 INQCUST_DOB,
+         3 INQCUST_DOB_DD         CHAR(2),
+         3 INQCUST_DOB_MM         CHAR(2),
+         3 INQCUST_DOB_YYYY       CHAR(4),
+       2 INQCUST_PHONE            CHAR(20),
+       2 INQCUST_ADDR,
+         3 INQCUST_ADDR_LINE1     CHAR(50),
+         3 INQCUST_ADDR_LINE2     CHAR(50),
+         3 INQCUST_CITY           CHAR(50),
+         3 INQCUST_POSTCODE       CHAR(10),
+         3 INQCUST_COUNTRY        CHAR(50),
+       2 INQCUST_STATUS           CHAR(10),
+       2 INQCUST_CREATED_DATE,
+         3 INQCUST_CREATED_DD     CHAR(2),
+         3 INQCUST_CREATED_MM     CHAR(2),
+         3 INQCUST_CREATED_YYYY   CHAR(4),
+       2 INQCUST_CREDIT_SCORE     FIXED DEC(3,0),
+       2 INQCUST_CS_REVIEW_DT,
+         3 INQCUST_CS_REVIEW_DD   CHAR(2),
+         3 INQCUST_CS_REVIEW_MM   CHAR(2),
+         3 INQCUST_CS_REVIEW_YYYY CHAR(4),
+       2 INQCUST_INQ_SUCCESS      CHAR(1),
+       2 INQCUST_INQ_FAIL_CD      CHAR(1),
+       2 INQCUST_PCB_POINTER      CHAR(4);

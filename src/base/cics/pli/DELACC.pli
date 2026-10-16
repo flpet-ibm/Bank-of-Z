@@ -1,0 +1,435 @@
+ *PROCESS CICS,SQL;
+ /* ----------------------------------------------------------------- */
+ /*  Copyright IBM Corp. 2023                                         */
+ /* ----------------------------------------------------------------- */
+ /*  DELACC - Delete Account                                          */
+ /*                                                                   */
+ /*  Reads the specified account from DB2, deletes it, and writes a   */
+ /*  PROCTRAN record.  Returns the deleted account data in COMMAREA.  */
+ /* ----------------------------------------------------------------- */
+ DELACC: PROCEDURE OPTIONS(MAIN REENTRANT);
+
+   /* ----------------------------------------------------------------*/
+   /*  SQLCA                                                          */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL INCLUDE SQLCA;
+
+   /* ----------------------------------------------------------------*/
+   /*  ACCOUNT table declaration                                      */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL DECLARE ACCOUNT TABLE
+     ( ACCOUNT_EYECATCHER          CHAR(4),
+       ACCOUNT_CUSTOMER_NUMBER     CHAR(10),
+       ACCOUNT_SORTCODE            CHAR(6)      NOT NULL,
+       ACCOUNT_NUMBER              CHAR(8)      NOT NULL,
+       ACCOUNT_TYPE                CHAR(8),
+       ACCOUNT_INTEREST_RATE       DECIMAL(4,2),
+       ACCOUNT_OPENED              DATE,
+       ACCOUNT_OVERDRAFT_LIMIT     INTEGER,
+       ACCOUNT_LAST_STATEMENT      DATE,
+       ACCOUNT_NEXT_STATEMENT      DATE,
+       ACCOUNT_AVAILABLE_BALANCE   DECIMAL(10,2),
+       ACCOUNT_ACTUAL_BALANCE      DECIMAL(10,2) );
+
+   /* ----------------------------------------------------------------*/
+   /*  PROCTRAN table declaration                                     */
+   /* ----------------------------------------------------------------*/
+   EXEC SQL DECLARE PROCTRAN TABLE
+     ( PROCTRAN_EYECATCHER   CHAR(4),
+       PROCTRAN_SORTCODE     CHAR(6)       NOT NULL,
+       PROCTRAN_NUMBER       CHAR(8)       NOT NULL,
+       PROCTRAN_DATE         CHAR(10),
+       PROCTRAN_TIME         CHAR(6),
+       PROCTRAN_REF          CHAR(12),
+       PROCTRAN_TYPE         CHAR(3),
+       PROCTRAN_DESC         CHAR(40),
+       PROCTRAN_AMOUNT       DECIMAL(10,2) );
+
+   /* ----------------------------------------------------------------*/
+   /*  Sort code                                                      */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE SORTCODE;
+
+   /* ----------------------------------------------------------------*/
+   /*  DB2 host variables - ACCOUNT                                   */
+   /* ----------------------------------------------------------------*/
+   DCL HV_ACCOUNT_EYECATCHER      CHAR(4);
+   DCL HV_ACCOUNT_CUST_NO         CHAR(10);
+   DCL HV_ACCOUNT_SORTCODE        CHAR(6);
+   DCL HV_ACCOUNT_ACC_NO          CHAR(8);
+   DCL HV_ACCOUNT_ACC_TYPE        CHAR(8);
+   DCL HV_ACCOUNT_INT_RATE        FIXED DEC(6,2);
+   DCL HV_ACCOUNT_OPENED          CHAR(10);   /* DATE as CHAR(10)     */
+   DCL HV_ACCOUNT_OVERDRAFT_LIM   FIXED BIN(31);
+   DCL HV_ACCOUNT_LAST_STMT       CHAR(10);   /* DATE as CHAR(10)     */
+   DCL HV_ACCOUNT_NEXT_STMT       CHAR(10);   /* DATE as CHAR(10)     */
+   DCL HV_ACCOUNT_AVAIL_BAL       FIXED DEC(12,2);
+   DCL HV_ACCOUNT_ACTUAL_BAL      FIXED DEC(12,2);
+
+   /* ----------------------------------------------------------------*/
+   /*  DB2 host variables - PROCTRAN                                  */
+   /* ----------------------------------------------------------------*/
+   DCL HV_PROCTRAN_EYECATCHER     CHAR(4);
+   DCL HV_PROCTRAN_SORT_CODE      CHAR(6);
+   DCL HV_PROCTRAN_ACC_NUMBER     CHAR(8);
+   DCL HV_PROCTRAN_DATE           CHAR(10);
+   DCL HV_PROCTRAN_TIME           CHAR(6);
+   DCL HV_PROCTRAN_REF            CHAR(12);
+   DCL HV_PROCTRAN_TYPE           CHAR(3);
+   DCL HV_PROCTRAN_DESC           CHAR(40);
+   DCL HV_PROCTRAN_AMOUNT         FIXED DEC(12,2);
+
+   /* ----------------------------------------------------------------*/
+   /*  CICS response codes                                            */
+   /* ----------------------------------------------------------------*/
+   DCL WS_CICS_RESP               FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2              FIXED BIN(31) INIT(0);
+
+   /* ----------------------------------------------------------------*/
+   /*  Date reformatting work area                                    */
+   /* ----------------------------------------------------------------*/
+   DCL 1 DB2_DATE_REFORMAT,
+         2 DB2_DATE_REF_YR          CHAR(4),
+         2 DB2_DATE_REF_SEP1        CHAR(1),
+         2 DB2_DATE_REF_MNTH        CHAR(2),
+         2 DB2_DATE_REF_SEP2        CHAR(1),
+         2 DB2_DATE_REF_DAY         CHAR(2);
+
+   /* ----------------------------------------------------------------*/
+   /*  Work area for date formatted as DD.MM.YYYY                     */
+   /* ----------------------------------------------------------------*/
+   DCL 1 WS_ORIG_DATE_GRP_X,
+         2 WS_ORIG_DATE_DD_X        CHAR(2),
+         2 WS_ORIG_DATE_SEP1_X      CHAR(1) INIT('.'),
+         2 WS_ORIG_DATE_MM_X        CHAR(2),
+         2 WS_ORIG_DATE_SEP2_X      CHAR(1) INIT('.'),
+         2 WS_ORIG_DATE_YYYY_X      CHAR(4);
+
+   /* ----------------------------------------------------------------*/
+   /*  Stored actual balance for PROCTRAN amount                      */
+   /* ----------------------------------------------------------------*/
+   DCL ACCOUNT_ACT_BAL_STORE       FIXED DEC(12,2) INIT(0);
+
+   /* ----------------------------------------------------------------*/
+   /*  PROCTRAN desc overlay pointers                                 */
+   /* ----------------------------------------------------------------*/
+   DCL PROC_TRAN_DESC_PTR          POINTER;
+   DCL 1 PROC_TRAN_DESC_DELACC BASED(PROC_TRAN_DESC_PTR),
+         2 PROC_DESC_DELACC_CUSTOMER  CHAR(10),
+         2 PROC_DESC_DELACC_ACCTYPE   CHAR(8),
+         2 PROC_DESC_DELACC_LAST_DD   CHAR(2),
+         2 PROC_DESC_DELACC_LAST_MM   CHAR(2),
+         2 PROC_DESC_DELACC_LAST_YYYY CHAR(4),
+         2 PROC_DESC_DELACC_NEXT_DD   CHAR(2),
+         2 PROC_DESC_DELACC_NEXT_MM   CHAR(2),
+         2 PROC_DESC_DELACC_NEXT_YYYY CHAR(4),
+         2 PROC_DESC_DELACC_FOOTER    CHAR(6);
+
+   /* ----------------------------------------------------------------*/
+   /*  Miscellaneous work variables                                   */
+   /* ----------------------------------------------------------------*/
+   DCL SQLCODE_DISPLAY             FIXED BIN(31);
+   DCL WS_EIBTASKN12               FIXED DEC(12,0) INIT(0);
+   DCL WS_U_TIME                   FIXED DEC(15,0) INIT(0);
+   DCL WS_ORIG_DATE                CHAR(10);
+   DCL WS_TIME_NOW                 CHAR(6);
+   DCL WS_ABEND_PGM                CHAR(8) INIT('ABNDPROC');
+   DCL MY_ABEND_CODE               CHAR(4);
+   DCL WS_CA_LEN                   FIXED BIN(15);
+
+   /* Last-stmt / next-stmt day/month/year split fields */
+   DCL LAST_DD                     CHAR(2);
+   DCL LAST_MM                     CHAR(2);
+   DCL LAST_YYYY                   CHAR(4);
+   DCL NEXT_DD                     CHAR(2);
+   DCL NEXT_MM                     CHAR(2);
+   DCL NEXT_YYYY                   CHAR(4);
+
+   /* ----------------------------------------------------------------*/
+   /*  Abend info record                                              */
+   /* ----------------------------------------------------------------*/
+   %INCLUDE ABNDINFO;
+
+   /* ----------------------------------------------------------------*/
+   /*  COMMAREA                                                       */
+   /* ----------------------------------------------------------------*/
+   DCL COMMAREA_PTR                POINTER;
+   %INCLUDE DELACC;
+   DCL 1 DFHCOMMAREA BASED(COMMAREA_PTR) LIKE DELACC_COMMAREA;
+
+   /* ================================================================*/
+   /*  MAIN PROCEDURE LOGIC                                           */
+   /* ================================================================*/
+
+   /* Get the COMMAREA address */
+   EXEC CICS ADDRESS
+        COMMAREA(COMMAREA_PTR)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2) ;
+
+   HV_ACCOUNT_SORTCODE = SORTCODE;
+
+   CALL READ_ACCOUNT_DB2;
+
+   IF DELACC_DEL_SUCCESS = 'Y' THEN DO;
+     CALL DEL_ACCOUNT_DB2;
+     IF DELACC_DEL_SUCCESS = 'Y' THEN
+       CALL WRITE_PROCTRAN;
+   END;
+
+   CALL GET_ME_OUT_OF_HERE;
+
+ /* ------------------------------------------------------------------*/
+ /*  READ_ACCOUNT_DB2 - SELECT the account row                        */
+ /* ------------------------------------------------------------------*/
+ READ_ACCOUNT_DB2: PROCEDURE;
+
+   HV_ACCOUNT_ACC_NO   = DELACC_ACCNO;
+   HV_ACCOUNT_SORTCODE = SORTCODE;
+
+   EXEC SQL
+     SELECT ACCOUNT_EYECATCHER,
+            ACCOUNT_CUSTOMER_NUMBER,
+            ACCOUNT_SORTCODE,
+            ACCOUNT_NUMBER,
+            ACCOUNT_TYPE,
+            ACCOUNT_INTEREST_RATE,
+            ACCOUNT_OPENED,
+            ACCOUNT_OVERDRAFT_LIMIT,
+            ACCOUNT_LAST_STATEMENT,
+            ACCOUNT_NEXT_STATEMENT,
+            ACCOUNT_AVAILABLE_BALANCE,
+            ACCOUNT_ACTUAL_BALANCE
+     INTO  :HV_ACCOUNT_EYECATCHER,
+           :HV_ACCOUNT_CUST_NO,
+           :HV_ACCOUNT_SORTCODE,
+           :HV_ACCOUNT_ACC_NO,
+           :HV_ACCOUNT_ACC_TYPE,
+           :HV_ACCOUNT_INT_RATE,
+           :HV_ACCOUNT_OPENED,
+           :HV_ACCOUNT_OVERDRAFT_LIM,
+           :HV_ACCOUNT_LAST_STMT,
+           :HV_ACCOUNT_NEXT_STMT,
+           :HV_ACCOUNT_AVAIL_BAL,
+           :HV_ACCOUNT_ACTUAL_BAL
+     FROM ACCOUNT
+     WHERE ACCOUNT_NUMBER   = :HV_ACCOUNT_ACC_NO
+       AND ACCOUNT_SORTCODE = :HV_ACCOUNT_SORTCODE ;
+
+   IF SQLCODE ^= 0 & SQLCODE ^= 100 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+     ABNDINFO_REC = '';
+     ABND_RESPCODE  = '0';
+     ABND_RESP2CODE = '0';
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE  = WS_ORIG_DATE;
+     ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE      = 'HRAC';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE   = SUBSTR(CHAR(SQLCODE_DISPLAY), 1, 10);
+     ABND_FREEFORM  = 'RAD010 - Issue with ACCOUNT row select, for ' ||
+                      'Account ' || HV_ACCOUNT_ACC_NO ||
+                      ' and SORTCODE ' || HV_ACCOUNT_SORTCODE;
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     EXEC CICS ABEND ABCODE('HRAC') NODUMP ;
+   END;
+
+   IF SQLCODE = 100 THEN DO;
+     DELACC_DEL_SUCCESS = 'N';
+     DELACC_DEL_FAIL_CD = '1';
+     RETURN;
+   END;
+
+   /* SQLCODE = 0: account found */
+   DELACC_SUCCESS     = ' ';
+   DELACC_DEL_SUCCESS = 'Y';
+   DELACC_DEL_FAIL_CD = ' ';
+
+   /* Map host variables to COMMAREA */
+   DELACC_EYE       = HV_ACCOUNT_EYECATCHER;
+   DELACC_CUSTNO    = HV_ACCOUNT_CUST_NO;
+   DELACC_SCODE     = HV_ACCOUNT_SORTCODE;
+   DELACC_ACCNO     = HV_ACCOUNT_ACC_NO;
+   DELACC_ACC_TYPE  = HV_ACCOUNT_ACC_TYPE;
+   DELACC_INT_RATE  = HV_ACCOUNT_INT_RATE;
+
+   DB2_DATE_REFORMAT = HV_ACCOUNT_OPENED;
+   DELACC_OPENED = DEC(DB2_DATE_REF_YR || DB2_DATE_REF_MNTH
+                       || DB2_DATE_REF_DAY, 8, 0);
+
+   DELACC_OVERDRAFT = HV_ACCOUNT_OVERDRAFT_LIM;
+
+   DB2_DATE_REFORMAT = HV_ACCOUNT_LAST_STMT;
+   LAST_DD   = DB2_DATE_REF_DAY;
+   LAST_MM   = DB2_DATE_REF_MNTH;
+   LAST_YYYY = DB2_DATE_REF_YR;
+   DELACC_LAST_STMT_DT = DEC(DB2_DATE_REF_YR || DB2_DATE_REF_MNTH
+                             || DB2_DATE_REF_DAY, 8, 0);
+
+   DB2_DATE_REFORMAT = HV_ACCOUNT_NEXT_STMT;
+   NEXT_DD   = DB2_DATE_REF_DAY;
+   NEXT_MM   = DB2_DATE_REF_MNTH;
+   NEXT_YYYY = DB2_DATE_REF_YR;
+   DELACC_NEXT_STMT_DT = DEC(DB2_DATE_REF_YR || DB2_DATE_REF_MNTH
+                             || DB2_DATE_REF_DAY, 8, 0);
+
+   DELACC_AVAIL_BAL  = HV_ACCOUNT_AVAIL_BAL;
+   DELACC_ACTUAL_BAL = HV_ACCOUNT_ACTUAL_BAL;
+   ACCOUNT_ACT_BAL_STORE = HV_ACCOUNT_ACTUAL_BAL;
+
+ END READ_ACCOUNT_DB2;
+
+ /* ------------------------------------------------------------------*/
+ /*  DEL_ACCOUNT_DB2 - DELETE the account row                         */
+ /* ------------------------------------------------------------------*/
+ DEL_ACCOUNT_DB2: PROCEDURE;
+
+   EXEC SQL
+     DELETE FROM ACCOUNT
+     WHERE ACCOUNT_SORTCODE = :HV_ACCOUNT_SORTCODE
+       AND ACCOUNT_NUMBER   = :HV_ACCOUNT_ACC_NO ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     DELACC_SUCCESS     = ' ';
+     DELACC_DEL_SUCCESS = 'N';
+     DELACC_DEL_FAIL_CD = '3';
+   END;
+
+ END DEL_ACCOUNT_DB2;
+
+ /* ------------------------------------------------------------------*/
+ /*  WRITE_PROCTRAN - Write a PROCTRAN record for the deletion        */
+ /* ------------------------------------------------------------------*/
+ WRITE_PROCTRAN: PROCEDURE;
+
+   CALL WRITE_PROCTRAN_DB2;
+
+ END WRITE_PROCTRAN;
+
+ /* ------------------------------------------------------------------*/
+ /*  WRITE_PROCTRAN_DB2 - INSERT row into PROCTRAN                    */
+ /* ------------------------------------------------------------------*/
+ WRITE_PROCTRAN_DB2: PROCEDURE;
+
+   HV_PROCTRAN_EYECATCHER = 'PRTR';
+   HV_PROCTRAN_SORT_CODE  = HV_ACCOUNT_SORTCODE;
+   HV_PROCTRAN_ACC_NUMBER = HV_ACCOUNT_ACC_NO;
+   WS_EIBTASKN12          = EIBTASKN;
+   HV_PROCTRAN_REF        = SUBSTR(CHAR(WS_EIBTASKN12),1,12);
+
+   EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+
+   EXEC CICS FORMATTIME
+        ABSTIME(WS_U_TIME)
+        DDMMYYYY(WS_ORIG_DATE)
+        TIME(HV_PROCTRAN_TIME)
+        DATESEP('.') ;
+
+   WS_ORIG_DATE_DD_X   = SUBSTR(WS_ORIG_DATE,1,2);
+   WS_ORIG_DATE_MM_X   = SUBSTR(WS_ORIG_DATE,4,2);
+   WS_ORIG_DATE_YYYY_X = SUBSTR(WS_ORIG_DATE,7,4);
+   HV_PROCTRAN_DATE = WS_ORIG_DATE_DD_X || '.' ||
+                      WS_ORIG_DATE_MM_X || '.' ||
+                      WS_ORIG_DATE_YYYY_X;
+
+   /* Build the description using the DELACC overlay */
+   PROC_TRAN_DESC_PTR = ADDR(HV_PROCTRAN_DESC);
+   PROC_DESC_DELACC_CUSTOMER  = HV_ACCOUNT_CUST_NO;
+   PROC_DESC_DELACC_ACCTYPE   = HV_ACCOUNT_ACC_TYPE;
+   PROC_DESC_DELACC_LAST_DD   = LAST_DD;
+   PROC_DESC_DELACC_LAST_MM   = LAST_MM;
+   PROC_DESC_DELACC_LAST_YYYY = LAST_YYYY;
+   PROC_DESC_DELACC_NEXT_DD   = NEXT_DD;
+   PROC_DESC_DELACC_NEXT_MM   = NEXT_MM;
+   PROC_DESC_DELACC_NEXT_YYYY = NEXT_YYYY;
+   PROC_DESC_DELACC_FOOTER    = '      ';
+
+   HV_PROCTRAN_TYPE   = 'BDA';   /* Branch Delete Account */
+   HV_PROCTRAN_AMOUNT = ACCOUNT_ACT_BAL_STORE;
+
+   EXEC SQL
+     INSERT INTO PROCTRAN
+       ( PROCTRAN_EYECATCHER,
+         PROCTRAN_SORTCODE,
+         PROCTRAN_NUMBER,
+         PROCTRAN_DATE,
+         PROCTRAN_TIME,
+         PROCTRAN_REF,
+         PROCTRAN_TYPE,
+         PROCTRAN_DESC,
+         PROCTRAN_AMOUNT )
+     VALUES
+       ( :HV_PROCTRAN_EYECATCHER,
+         :HV_PROCTRAN_SORT_CODE,
+         :HV_PROCTRAN_ACC_NUMBER,
+         :HV_PROCTRAN_DATE,
+         :HV_PROCTRAN_TIME,
+         :HV_PROCTRAN_REF,
+         :HV_PROCTRAN_TYPE,
+         :HV_PROCTRAN_DESC,
+         :HV_PROCTRAN_AMOUNT ) ;
+
+   IF SQLCODE ^= 0 THEN DO;
+     SQLCODE_DISPLAY = SQLCODE;
+     ABNDINFO_REC = '';
+     ABND_RESPCODE  = SUBSTR(CHAR(EIBRESP),  1, 10);
+     ABND_RESP2CODE = SUBSTR(CHAR(EIBRESP2), 1, 10);
+     EXEC CICS ASSIGN APPLID(ABND_APPLID) ;
+     ABND_TASKNO_KEY = SUBSTR(CHAR(EIBTASKN), 1, 4);
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE  = WS_ORIG_DATE;
+     ABND_TIME  = SUBSTR(WS_TIME_NOW,1,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,3,2) || ':' ||
+                  SUBSTR(WS_TIME_NOW,5,2);
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE      = 'HWPT';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM) ;
+     ABND_SQLCODE   = SUBSTR(CHAR(SQLCODE_DISPLAY), 1, 10);
+     ABND_FREEFORM  = 'WPD010 - Unable to WRITE to PROCTRAN row ' ||
+                      'datastore. EIBRESP=' ||
+                      SUBSTR(CHAR(EIBRESP), 1, 10) ||
+                      ' RESP2=' || SUBSTR(CHAR(EIBRESP2), 1, 10);
+     WS_CA_LEN = SIZE(ABNDINFO_REC);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+                    COMMAREA(ABNDINFO_REC)
+                    LENGTH(WS_CA_LEN) ;
+     EXEC CICS ABEND ABCODE('HWPT') NODUMP ;
+   END;
+
+ END WRITE_PROCTRAN_DB2;
+
+ /* ------------------------------------------------------------------*/
+ /*  GET_ME_OUT_OF_HERE - Return to CICS                              */
+ /* ------------------------------------------------------------------*/
+ GET_ME_OUT_OF_HERE: PROCEDURE;
+
+   EXEC CICS RETURN ;
+
+ END GET_ME_OUT_OF_HERE;
+
+ /* ------------------------------------------------------------------*/
+ /*  POPULATE_TIME_DATE - Get current date and time via CICS          */
+ /* ------------------------------------------------------------------*/
+ POPULATE_TIME_DATE: PROCEDURE;
+
+   EXEC CICS ASKTIME ABSTIME(WS_U_TIME) ;
+
+   EXEC CICS FORMATTIME
+        ABSTIME(WS_U_TIME)
+        DDMMYYYY(WS_ORIG_DATE)
+        TIME(WS_TIME_NOW)
+        DATESEP ;
+
+ END POPULATE_TIME_DATE;
+
+ END DELACC;
