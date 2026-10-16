@@ -2,6 +2,7 @@
 *.cbl zos-working-tree-encoding=ibm-1047 
 *.bms zos-working-tree-encoding=ibm-1047 
 *.pli zos-working-tree-encoding=ibm-1047 
+*.inc zos-working-tree-encoding=ibm-1047 
 *.mfs zos-working-tree-encoding=ibm-1047 
 *.bnd zos-working-tree-encoding=ibm-1047 
 *.lnk zos-working-tree-encoding=ibm-1047 
