@@ -614,7 +614,7 @@ CREACC: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
             ABND_SQLCODE  = SQLCODE_DISPLAY;
             ABND_FREEFORM = 'FNAND010(2) - ACCOUNT NCS ' ||
                             NCS_ACC_NO_NAME ||
-                            ' Cannot be accessed and DB2 UPDATE failed.' ||
+                        ' Cannot be accessed and DB2 UPDATE failed.' ||
                             ' EIBRESP=' || ABND_RESPCODE ||
                             ' RESP2=' || ABND_RESP2CODE;
 
@@ -739,7 +739,7 @@ CREACC: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
             ABND_SQLCODE  = SQLCODE_DISPLAY;
             ABND_FREEFORM = 'FNAND010(4) - ACCOUNT NCS ' ||
                             NCS_ACC_NO_NAME ||
-                            ' Cannot be accessed and DB2 UPDATE failed.' ||
+                        ' Cannot be accessed and DB2 UPDATE failed.' ||
                             ' EIBRESP=' || ABND_RESPCODE ||
                             ' RESP2=' || ABND_RESP2CODE;
 
