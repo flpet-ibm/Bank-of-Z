@@ -758,7 +758,7 @@
    /* WRITE_ACCOUNT_DB2                                               */
    /***************************************************************** */
    WRITE_ACCOUNT_DB2: PROC;
-      HOST_ACCOUNT_ROW        = '';
+      /* HOST_ACCOUNT_ROW        = ''; */
       HV_ACCOUNT_EYECATCHER   = 'ACCT';
       HV_ACCOUNT_CUST_NO      = COMM_CUSTNO;
       HV_ACCOUNT_SORTCODE     = SORTCODE;
