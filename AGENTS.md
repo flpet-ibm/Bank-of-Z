@@ -101,6 +101,8 @@ A scanned program database is available at the path stored in `.bobz/local-setti
 - Comment syntax: every block comment opener `/*` must have a matching closer `*/` on the **same line**; the closing `*/` must end at or before column 72
 - DB2 `VARCHAR` columns must be declared as `CHAR(n) VAR` in PL/I host variable structures
 - *process statement must begin in column 1
+- no characters after column 72
+- never add a *process statement to for activate SQL or CICS options.
 
 ## Technical Documentation
 

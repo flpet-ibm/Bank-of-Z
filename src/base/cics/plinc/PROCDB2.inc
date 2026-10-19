@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from PROCDB2.cpy — SQL DECLARE TABLE for PROCTRAN.   */
+ /* Converted from PROCDB2.cpy  -- SQL DECLARE TABLE for PROCTRAN.   */
  /* Use with: EXEC SQL INCLUDE PROCDB2                             */
  EXEC SQL DECLARE PROCTRAN TABLE
     (
