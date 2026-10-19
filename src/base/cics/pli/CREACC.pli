@@ -362,7 +362,7 @@
    DCL WS_EXIT_RETRY_LOOP         CHAR(1)  INIT(' ');
 
    /***************************************************************** */
-   /* ═══════════════ PREMIERE / MAIN LOGIC ═══════════════          */
+   /*  PREMIERE/MAIN LOGIC */
    /***************************************************************** */
    PUT SKIP LIST('CREACC: Starting account creation');
    PUT SKIP LIST('CREACC: Customer number=' || COMM_CUSTNO);
