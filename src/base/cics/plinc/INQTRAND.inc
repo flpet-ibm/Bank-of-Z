@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from INQTRAND.cpy — Inquire Transaction Detail.      */
+ /* Converted from INQTRAND.cpy - Inquire Transaction Detail.      */
  /* Note: INQTRAND.cpy defined its own 01-level.                   */
  /* For PL/I include we strip the 01 level; declare in program.   */
  /* 88-levels converted to comments showing valid values.         */

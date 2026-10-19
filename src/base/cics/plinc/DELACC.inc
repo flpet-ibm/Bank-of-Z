@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from DELACC.cpy — COMMAREA for Delete Account.       */
+ /* Converted from DELACC.cpy - COMMAREA for Delete Account.       */
  /* Note: DELACC.cpy defined its own 01-level (DELACC-COMMAREA).   */
  /* For PL/I include we strip the 01 level; declare in program.   */
  /* Include at level 3 inside the declaring DCL 1 structure.      */

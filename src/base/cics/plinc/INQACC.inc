@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from INQACC.cpy — COMMAREA for Inquire Account.      */
+ /* Converted from INQACC.cpy - COMMAREA for Inquire Account.      */
  /* Note: INQACC.cpy defined its own 01-level (INQACC-COMMAREA).   */
  /* For PL/I include we strip the 01 level; declare in program.   */
  /* Include at level 3 inside the declaring DCL 1 structure.      */

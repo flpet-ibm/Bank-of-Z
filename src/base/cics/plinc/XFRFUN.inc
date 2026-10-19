@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from XFRFUN.cpy — Transfer Function COMMAREA.        */
+ /* Converted from XFRFUN.cpy - Transfer Function COMMAREA.        */
  /* Include at level 3 inside the declaring DCL 1 structure.      */
    3 COMM_FACCNO                 CHAR(8),
    3 COMM_FSCODE                 CHAR(6),

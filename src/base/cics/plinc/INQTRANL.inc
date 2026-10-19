@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from INQTRANL.cpy — Inquire Transaction List.        */
+ /* Converted from INQTRANL.cpy - Inquire Transaction List.        */
  /* Note: INQTRANL.cpy defined its own 01-level.                   */
  /* For PL/I include we strip the 01 level; declare in program.   */
  /* 88-levels converted to comments showing valid values.         */

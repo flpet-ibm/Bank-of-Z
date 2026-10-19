@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from INQACCZ.cpy — Inquire Account (z/OS Connect).   */
+ /* Converted from INQACCZ.cpy - Inquire Account (z/OS Connect).   */
  /* Note: INQACCZ.cpy defined its own 01-level (INQACC-COMMAREA).  */
  /* For PL/I include we strip the 01 level; declare in program.   */
  /* PCB pointer stored as CHAR(4) (z/OS Connect serialisation).   */

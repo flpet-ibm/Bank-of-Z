@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from CRECUST.cpy — COMMAREA for Create Customer.     */
+ /* Converted from CRECUST.cpy - COMMAREA for Create Customer.     */
  /* Include at level 3 inside the declaring DCL 1 structure.      */
    3 COMM_EYECATCHER              CHAR(4),
    3 COMM_KEY,

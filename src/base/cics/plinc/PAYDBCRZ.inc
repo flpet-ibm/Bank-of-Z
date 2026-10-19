@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from PAYDBCRZ.cpy — Pay Debit/Credit (z/OS Connect). */
+ /* Converted from PAYDBCRZ.cpy - Pay Debit/Credit (z/OS Connect). */
  /* Identical structure to PAYDBCR.inc.                            */
  /* Include at level 3 inside the declaring DCL 1 structure.      */
    3 COMM_ACCNO                  CHAR(8),

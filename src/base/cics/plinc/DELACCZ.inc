@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from DELACCZ.cpy — variable-length account details.  */
+ /* Converted from DELACCZ.cpy - variable-length account details.  */
  /* OCCURS DEPENDING ON converted to (* REFER()) in PL/I.         */
  /* Include at level 3 inside the declaring DCL 1 structure.      */
    3 NUMBER_OF_ACCOUNTS           FIXED BIN(31),

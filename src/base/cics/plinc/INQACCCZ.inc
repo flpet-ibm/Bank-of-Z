@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from INQACCCZ.cpy — Inquire Accounts by Customer     */
+ /* Converted from INQACCCZ.cpy - Inquire Accounts by Customer     */
  /*  (z/OS Connect variant, PCB as CHAR(4)).                       */
  /* OCCURS DEPENDING ON converted to fixed (20) per COBOL max.    */
  /* Include at level 3 inside the declaring DCL 1 structure.      */

@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from PROCISRT.cpy — Process Insert COMMAREA.         */
+ /* Converted from PROCISRT.cpy - Process Insert COMMAREA.         */
  /* Note: PROCISRT.cpy defined its own 01-level.                   */
  /* For PL/I include we strip the 01 level; declare in program.   */
  /* Multiple REDEFINES converted to UNIONs.                        */

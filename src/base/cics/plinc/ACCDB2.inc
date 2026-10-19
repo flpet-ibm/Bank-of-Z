@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from ACCDB2.cpy — SQL DECLARE TABLE statement.       */
+ /* Converted from ACCDB2.cpy - SQL DECLARE TABLE statement.       */
  /* Use with: EXEC SQL INCLUDE ACCDB2                              */
  EXEC SQL DECLARE ACCOUNT TABLE
     ( ACCOUNT_EYECATCHER             CHAR(4),

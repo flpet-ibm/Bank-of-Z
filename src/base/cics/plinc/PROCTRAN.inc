@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from PROCTRAN.cpy — Process Transaction record.      */
+ /* Converted from PROCTRAN.cpy - Process Transaction record.      */
  /* Multiple REDEFINES converted to UNIONs.                        */
  /* 88-levels converted to comments showing valid values.         */
  /* Include at level 3 inside the declaring DCL 1 structure.      */

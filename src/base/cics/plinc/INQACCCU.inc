@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from INQACCCU.cpy — Inquire Accounts by Customer.    */
+ /* Converted from INQACCCU.cpy - Inquire Accounts by Customer.    */
  /* OCCURS DEPENDING ON converted to fixed (20) per COBOL max.    */
  /* Include at level 3 inside the declaring DCL 1 structure.      */
    3 NUMBER_OF_ACCOUNTS           FIXED BIN(31),

@@ -5,7 +5,7 @@
  /*  Db2 CUSTOMER Table Declaration                               */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from CUSTDB2.cpy — SQL DECLARE TABLE statement.      */
+ /* Converted from CUSTDB2.cpy - SQL DECLARE TABLE statement.      */
  /* Use with: EXEC SQL INCLUDE CUSTDB2                             */
  EXEC SQL DECLARE CUSTOMER TABLE
     ( CUSTOMER_EYECATCHER            CHAR(4),

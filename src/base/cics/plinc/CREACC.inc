@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from CREACC.cpy — COMMAREA for Create Account.       */
+ /* Converted from CREACC.cpy - COMMAREA for Create Account.       */
  /* Include at level 3 inside the declaring DCL 1 DFHCOMMAREA.    */
    3 COMM_EYECATCHER              CHAR(4),
    3 COMM_CUSTNO                  CHAR(10),

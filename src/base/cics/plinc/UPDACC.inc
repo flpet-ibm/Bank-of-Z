@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from UPDACC.cpy — Update Account COMMAREA.           */
+ /* Converted from UPDACC.cpy - Update Account COMMAREA.           */
  /* Include at level 3 inside the declaring DCL 1 structure.      */
    3 COMM_EYE                    CHAR(4),
    3 COMM_CUSTNO                 CHAR(10),

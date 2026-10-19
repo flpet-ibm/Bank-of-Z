@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from INQCUSTZ.cpy — Inquire Customer COMMAREA.       */
+ /* Converted from INQCUSTZ.cpy - Inquire Customer COMMAREA.       */
  /* Include at level 3 inside the declaring DCL 1 structure.      */
    3 INQCUST_EYE                  CHAR(4),
    3 INQCUST_SCODE                CHAR(6),

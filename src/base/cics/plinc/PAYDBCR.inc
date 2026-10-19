@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from PAYDBCR.cpy — Pay Debit/Credit COMMAREA.        */
+ /* Converted from PAYDBCR.cpy - Pay Debit/Credit COMMAREA.        */
  /* Include at level 3 inside the declaring DCL 1 structure.      */
    3 COMM_ACCNO                  CHAR(8),
    3 COMM_AMT                    FIXED DEC(12,2),

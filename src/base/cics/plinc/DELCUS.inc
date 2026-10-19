@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from DELCUS.cpy — COMMAREA for Delete Customer.      */
+ /* Converted from DELCUS.cpy - COMMAREA for Delete Customer.      */
  /* Include at level 3 inside the declaring DCL 1 structure.      */
    3 COMM_EYE                    CHAR(4),
    3 COMM_SCODE                  CHAR(6),

@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from INQACCSZ.cpy — Inquire Accounts (z/OS Connect). */
+ /* Converted from INQACCSZ.cpy - Inquire Accounts (z/OS Connect). */
  /* Note: INQACCSZ.cpy defined its own 01-level (INQACCS).        */
  /* For PL/I include we strip the 01 level; declare in program.   */
  /* OCCURS DEPENDING ON converted to fixed (20) per COBOL max.    */

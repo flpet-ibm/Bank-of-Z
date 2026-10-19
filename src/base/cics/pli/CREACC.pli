@@ -17,7 +17,7 @@
    DCL COMM_AREA_PTR POINTER;
 
    /******************************************************************/
-   /* DFHCOMMAREA — COMMAREA for Create Account (from CREACC.cpy)   */
+   /* DFHCOMMAREA - COMMAREA for Create Account (from CREACC.cpy)   */
    /******************************************************************/
    DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR),
    %INCLUDE CREACC;
@@ -280,7 +280,7 @@
 
    /***************************************************************** */
    /* Account control record (from ACCTCTRL.cpy)                     */
-   /* Note: included inline — NUMBER_OF_ACCOUNTS renamed to avoid    */
+   /* Note: included inline - NUMBER_OF_ACCOUNTS renamed to avoid    */
    /* clash with INQACCCU_COMMAREA.NUMBER_OF_ACCOUNTS.               */
    /***************************************************************** */
    DCL 1 ACCOUNT_CONTROL,
@@ -331,13 +331,13 @@
    DCL SQLCODE_DISPLAY            CHAR(9)  INIT(' ');
 
    /***************************************************************** */
-   /* OUTPUT-DATA — Account record (from ACCOUNT.cpy)                */
+   /* OUTPUT-DATA - Account record (from ACCOUNT.cpy)                */
    /***************************************************************** */
    DCL 1 OUTPUT_DATA,
    %INCLUDE ACCOUNT;
 
    /***************************************************************** */
-   /* OUTPUTC-DATA — Customer record (from CUSTOMER.cpy)             */
+   /* OUTPUTC-DATA - Customer record (from CUSTOMER.cpy)             */
    /***************************************************************** */
    DCL 1 OUTPUTC_DATA,
    %INCLUDE CUSTOMER;
@@ -828,7 +828,7 @@
          CALL GET_ME_OUT_OF_HERE;
       END;
 
-      /* INSERT was successful — write to PROCTRAN */
+      /* INSERT was successful - write to PROCTRAN */
       STORED_SORTCODE = HV_ACCOUNT_SORTCODE;
       STORED_ACCNO    = HV_ACCOUNT_ACC_NO;
       STORED_CUSTNO   = HV_ACCOUNT_CUST_NO;

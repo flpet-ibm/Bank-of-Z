@@ -3,7 +3,7 @@
  /*  Copyright IBM Corp. 2023                                      */
  /*                                                                */
  /* **************************************************************** */
- /* Converted from NEWACCNO.cpy — New Account Number COMMAREA.     */
+ /* Converted from NEWACCNO.cpy - New Account Number COMMAREA.     */
  /* 88-levels converted to comments showing valid function codes.  */
  /* Include at level 3 inside the declaring DCL 1 structure.      */
    3 NEWACCNO_FUNCTION            CHAR(1),
