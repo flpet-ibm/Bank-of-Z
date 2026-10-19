@@ -103,6 +103,7 @@ A scanned program database is available at the path stored in `.bobz/local-setti
 - *process statement must begin in column 1
 - no characters after column 72
 - never add a *process statement to for activate SQL or CICS options.
+- never write the character — in the files. Use - instead
 
 ## Technical Documentation
 
