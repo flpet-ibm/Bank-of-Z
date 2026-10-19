@@ -16,11 +16,12 @@ propertyGroups:
       - name: maclib
         type: local
         locations:
-          - "**"
+          - "**/mac"
       - name: proclib
         type: local
         locations:
-          - "**"
+          - "**/procs"
+            
 profiles:
   # TAZ
   - name: taz-test

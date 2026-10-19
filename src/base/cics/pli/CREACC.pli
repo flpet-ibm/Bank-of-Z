@@ -140,14 +140,14 @@
    /* NCS (Named Counter Service) definitions                         */
    /***************************************************************** */
    DCL 1 NCS_ACC_NO_STUFF,
-     3 NCS_ACC_NO_NAME,
+     3 NCS_ACC_NO_NAME_STRUC,
        5 NCS_ACC_NO_ACT_NAME      CHAR(9)  INIT('BANKZACCT'),
        5 NCS_ACC_NO_TEST_SORT     CHAR(6)  INIT('      '),
        5 NCS_ACC_NO_FILL          CHAR(2)  INIT('  '),
      3 NCS_ACC_NO_INC             FIXED BIN(63) INIT(0),
      3 NCS_ACC_NO_VALUE           FIXED BIN(63) INIT(0),
      3 NCS_ACC_NO_RESP            CHAR(2)  INIT('00');
-
+   DCL NCS_ACC_NO_NAME CHAR(17) BASED(ADDR(NCS_ACC_NO_NAME_STRUC));
    DCL WS_DISP_CUST_NO_VAL        FIXED DEC(18,0) INIT(0);
    DCL NCS_UPDATED                CHAR(1)  INIT('N');
 
@@ -497,7 +497,7 @@
    /***************************************************************** */
    FIND_NEXT_ACCOUNT: PROC;
       NCS_ACC_NO_INC = 1;
-      OUTPUT_DATA    = '';
+      /* struc OUTPUT_DATA    = ''; */
 
       /* <<sortcode>>-ACCOUNT-LAST */
       HV_CONTROL_NAME       = ' ';
@@ -550,7 +550,7 @@
          ABND_SQLCODE  = SQLCODE_DISPLAY;
          ABND_FREEFORM = 'FNAND010 - ACCOUNT NCS ' ||
                          NCS_ACC_NO_NAME ||
-                         ' Cannot be accessed and DB2 SELECT failed.' ||
+                        ' Cannot be accessed and DB2 SELECT failed.' ||
                          ' EIBRESP=' || ABND_RESPCODE ||
                          ' RESP2=' || ABND_RESP2CODE;
 
