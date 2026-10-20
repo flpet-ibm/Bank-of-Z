@@ -1,0 +1,25 @@
+*PROCESS SYSTEM(CICS) MARGINS(1,72);
+ /* **************************************************************** */
+ /*                                                                */
+ /*  Copyright IBM Corp. 2023                                      */
+ /*                                                                */
+ /* **************************************************************** */
+ /* GETSCODE - Returns the sort code in the COMMAREA.              */
+ /* Converted from GETSCODE.cbl                                    */
+ /* **************************************************************** */
+GETSCODE: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
+
+   DCL COMM_AREA_PTR POINTER;
+
+   /* Sort code constant */
+   DCL SORTCODE CHAR(6) INIT('987654');
+
+   /* DFHCOMMAREA - from GETSCODE.cpy */
+   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR),
+   %INCLUDE GETSCODE;
+
+   SORTCODE = SORTCODE;
+
+   EXEC CICS RETURN;
+
+END GETSCODE;

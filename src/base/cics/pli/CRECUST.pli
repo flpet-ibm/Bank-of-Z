@@ -1,0 +1,930 @@
+ /***************************************************************** */
+ /*                                                                */
+ /*  Copyright IBM Corp. 2023                                      */
+ /*                                                                */
+ /***************************************************************** */
+ /***************************************************************** */
+ /* CRECUST - Create Customer                                      */
+ /* Validates title, runs async credit check via CICS child        */
+ /* transactions OCR1-OCR5, validates DOB via CEEDAYS/CEELOCT,    */
+ /* assigns customer number from DB2 CONTROL table, inserts into  */
+ /* DB2 CUSTOMER table, and writes a PROCTRAN record.             */
+ /***************************************************************** */
+*PROCESS SYSTEM(CICS) SQL MARGINS(1,72);
+ CRECUST: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
+
+   DCL COMM_AREA_PTR POINTER;
+
+   /*****************************************************************/
+   /* DFHCOMMAREA - COMMAREA for Create Customer (CRECUST.cpy)     */
+   /*****************************************************************/
+   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR),
+   %INCLUDE CRECUST;
+
+   /*****************************************************************/
+   /* Sort code constant                                            */
+   /*****************************************************************/
+   %INCLUDE SORTCODE;
+
+   /*****************************************************************/
+   /* CUSTOMER DB2 table declaration                                */
+   /*****************************************************************/
+   EXEC SQL INCLUDE CUSTDB2;
+
+   /*****************************************************************/
+   /* PROCTRAN DB2 table declaration                                */
+   /*****************************************************************/
+   EXEC SQL INCLUDE PROCDB2;
+
+   /*****************************************************************/
+   /* SQLCA - embedded for LSP resolution of SQLCODE               */
+   /*****************************************************************/
+   DCL 1 SQLCA,
+     3 SQLCAID    CHAR(8),
+     3 SQLCABC    FIXED BIN(31),
+     3 SQLCODE    FIXED BIN(31),
+     3 SQLERRM,
+       5 SQLERRML FIXED BIN(15),
+       5 SQLERRMC CHAR(70),
+     3 SQLERRP    CHAR(8),
+     3 SQLERRD    (6) FIXED BIN(31),
+     3 SQLWARN,
+       5 SQLWARN0 CHAR(1),
+       5 SQLWARN1 CHAR(1),
+       5 SQLWARN2 CHAR(1),
+       5 SQLWARN3 CHAR(1),
+       5 SQLWARN4 CHAR(1),
+       5 SQLWARN5 CHAR(1),
+       5 SQLWARN6 CHAR(1),
+       5 SQLWARN7 CHAR(1),
+     3 SQLSTATE   CHAR(5);
+
+   /*****************************************************************/
+   /* ABNDINFO record                                               */
+   /*****************************************************************/
+   DCL 1 ABNDINFO_REC,
+   %INCLUDE ABNDINFO;
+
+   /*****************************************************************/
+   /* CUSTOMER working-storage record (OUTPUT-DATA equivalent)     */
+   /*****************************************************************/
+   DCL 1 OUTPUT_DATA,
+   %INCLUDE CUSTOMER;
+
+   /*****************************************************************/
+   /* PROCTRAN working area                                         */
+   /*****************************************************************/
+   DCL 1 PROCTRAN_AREA,
+   %INCLUDE PROCTRAN;
+
+   /*****************************************************************/
+   /* CUSTOMER-CONTROL area                                         */
+   /*****************************************************************/
+   DCL 1 CUSTOMER_CONTROL,
+   %INCLUDE CUSTCTRL;
+
+   /*****************************************************************/
+   /* Host variables for DB2 INSERT CUSTOMER                       */
+   /*****************************************************************/
+   DCL 1 HOST_CUSTOMER_ROW,
+     3 HV_CUSTOMER_EYECATCHER    CHAR(4),
+     3 HV_CUSTOMER_SORTCODE      CHAR(6),
+     3 HV_CUSTOMER_NUMBER        CHAR(10),
+     3 HV_CUSTOMER_TITLE         CHAR(10),
+     3 HV_CUSTOMER_FIRST_NAME    CHAR(50),
+     3 HV_CUSTOMER_LAST_NAME     CHAR(50),
+     3 HV_CUSTOMER_DOB           FIXED BIN(31),
+     3 HV_CUSTOMER_PHONE         CHAR(20),
+     3 HV_CUSTOMER_ADDR_LINE1    CHAR(50),
+     3 HV_CUSTOMER_ADDR_LINE2    CHAR(50),
+     3 HV_CUSTOMER_CITY          CHAR(50),
+     3 HV_CUSTOMER_POSTCODE      CHAR(10),
+     3 HV_CUSTOMER_COUNTRY       CHAR(50),
+     3 HV_CUSTOMER_STATUS        CHAR(10),
+     3 HV_CUSTOMER_CREATE_DATE   FIXED BIN(31),
+     3 HV_CUSTOMER_CREDIT_SCORE  FIXED BIN(15),
+     3 HV_CUSTOMER_CS_REVIEW_DATE FIXED BIN(31);
+
+   /*****************************************************************/
+   /* Host variables for DB2 INSERT PROCTRAN                       */
+   /*****************************************************************/
+   DCL 1 HOST_PROCTRAN_ROW,
+     3 HV_PROCTRAN_EYECATCHER    CHAR(4),
+     3 HV_PROCTRAN_SORT_CODE     CHAR(6),
+     3 HV_PROCTRAN_ACC_NUMBER    CHAR(8),
+     3 HV_PROCTRAN_DATE          CHAR(10),
+     3 HV_PROCTRAN_TIME          CHAR(6),
+     3 HV_PROCTRAN_REF           CHAR(12),
+     3 HV_PROCTRAN_TYPE          CHAR(3),
+     3 HV_PROCTRAN_DESC          CHAR(40),
+     3 HV_PROCTRAN_AMOUNT        FIXED DEC(12,2);
+
+   /*****************************************************************/
+   /* Host variables for DB2 CONTROL table                         */
+   /*****************************************************************/
+   DCL 1 HOST_CONTROL_ROW,
+     3 HV_CONTROL_NAME           CHAR(32),
+     3 HV_CONTROL_VALUE_NUM      FIXED BIN(31),
+     3 HV_CONTROL_VALUE_STR      CHAR(32);
+
+   /*****************************************************************/
+   /* Working storage                                               */
+   /*****************************************************************/
+   DCL WS_CICS_RESP         FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2        FIXED BIN(31) INIT(0);
+   DCL WS_CUSTOMER_NO_NUM   PIC'(10)9'   INIT(0);
+   DCL WS_U_TIME            FIXED DEC(15,0) INIT(0);
+   DCL WS_ORIG_DATE         CHAR(10)     INIT(' ');
+   DCL 1 WS_ORIG_DATE_GRP   BASED(ADDR(WS_ORIG_DATE)),
+         3 WS_ORIG_DATE_DD    CHAR(2),
+         3 WS_ORIG_DATE_SEP1  CHAR(1),
+         3 WS_ORIG_DATE_MM    CHAR(2),
+         3 WS_ORIG_DATE_SEP2  CHAR(1),
+         3 WS_ORIG_DATE_YYYY  CHAR(4);
+   DCL 1 WS_ORIG_DATE_GRP_X,
+         3 WS_ORIG_DATE_DD_X  CHAR(2),
+         3 WS_ORIG_DATE_DOT1  CHAR(1) INIT('.'),
+         3 WS_ORIG_DATE_MM_X  CHAR(2),
+         3 WS_ORIG_DATE_DOT2  CHAR(1) INIT('.'),
+         3 WS_ORIG_DATE_YYYY_X CHAR(4);
+   DCL WS_TITLE_VALID       CHAR(1)  INIT(' ');
+   DCL WS_DATE_OF_BIRTH_ERR CHAR(1)  INIT('N');
+   DCL WS_CREDIT_CHECK_ERR  CHAR(1)  INIT('N');
+   DCL WS_CC_CNT            FIXED BIN(15) INIT(0);
+   DCL WS_FINISHED_FETCHING CHAR(1)  INIT('N');
+   DCL WS_RETRIEVED_CNT     FIXED BIN(15) INIT(0);
+   DCL WS_ACTUAL_CS_SCR     FIXED BIN(31) INIT(0);
+   DCL WS_TOTAL_CS_SCR      FIXED BIN(31) INIT(0);
+   DCL WS_CHANNEL_NAME      CHAR(16) INIT(' ');
+   DCL WS_PUT_CONT_NAME     CHAR(16) INIT(' ');
+   DCL WS_PUT_CONT_LEN      FIXED BIN(31) INIT(0);
+   DCL WS_RUN_TRANSID       CHAR(4)  INIT(' ');
+   DCL WS_CONTAINER_NAME    CHAR(16) INIT(' ');
+   DCL WS_CHILD_CONTAINER_LEN FIXED BIN(31) INIT(0);
+   DCL WS_ANY_CHILD_TKN     CHAR(16) INIT(' ');
+   DCL WS_ANY_CHILD_FETCH_TKN CHAR(16) INIT(' ');
+   DCL WS_ANY_CHILD_FETCH_CHAN CHAR(16) INIT(' ');
+   DCL WS_ANY_CHILD_FETCH_ABCODE CHAR(4) INIT(' ');
+   DCL WS_CHILD_ISSUED_CNT  FIXED BIN(15) INIT(0);
+   DCL WS_CHILD_FETCH_COMPST FIXED BIN(31) INIT(0);
+   DCL 1 WS_CHILD_ARRAY (9),
+         3 WS_CHILD_CHAN  CHAR(16),
+         3 WS_CHILD_TKN   CHAR(16);
+
+   /*****************************************************************/
+   /* WS_CHILD_DATA mirrors CRECUST COMMAREA structure for GET CTR */
+   /*****************************************************************/
+   DCL 1 WS_CHILD_DATA,
+     3 WS_CHILD_EYECATCHER     CHAR(4),
+     3 WS_CHILD_KEY,
+       5 WS_CHILD_SORTCODE     CHAR(6),
+       5 WS_CHILD_NUMBER       CHAR(10),
+     3 WS_CHILD_NAME,
+       5 WS_CHILD_TITLE        CHAR(10),
+       5 WS_CHILD_FIRST_NAME   CHAR(50),
+       5 WS_CHILD_LAST_NAME    CHAR(50),
+     3 WS_CHILD_DOB,
+       5 WS_CHILD_DOB_DAY      CHAR(2),
+       5 WS_CHILD_DOB_MONTH    CHAR(2),
+       5 WS_CHILD_DOB_YEAR     CHAR(4),
+     3 WS_CHILD_PHONE          CHAR(20),
+     3 WS_CHILD_ADDRESS,
+       5 WS_CHILD_ADDR_LINE1   CHAR(50),
+       5 WS_CHILD_ADDR_LINE2   CHAR(50),
+       5 WS_CHILD_CITY         CHAR(50),
+       5 WS_CHILD_POSTCODE     CHAR(10),
+       5 WS_CHILD_COUNTRY      CHAR(50),
+     3 WS_CHILD_STATUS         CHAR(10),
+     3 WS_CHILD_CREATED_DATE,
+       5 WS_CHILD_CREATED_DAY  CHAR(2),
+       5 WS_CHILD_CREATED_MONTH CHAR(2),
+       5 WS_CHILD_CREATED_YEAR CHAR(4),
+     3 WS_CHILD_CREDIT_SCORE   CHAR(3),
+     3 WS_CHILD_CS_REVIEW_DATE,
+       5 WS_CHILD_CS_REVIEW_DAY   CHAR(2),
+       5 WS_CHILD_CS_REVIEW_MONTH CHAR(2),
+       5 WS_CHILD_CS_REVIEW_YEAR  CHAR(4),
+     3 WS_CHILD_SUCCESS        CHAR(1),
+     3 WS_CHILD_FAIL_CODE      CHAR(1);
+
+   /*****************************************************************/
+   /* NCS named counter structure                                   */
+   /*****************************************************************/
+   DCL 1 NCS_CUST_NO_STUFF,
+     3 NCS_CUST_NO_NAME,
+       5 NCS_CUST_NO_ACT_NAME  CHAR(9)  INIT('BANKZCUST'),
+       5 NCS_CUST_NO_TEST_SORT CHAR(6)  INIT(' '),
+       5 NCS_CUST_NO_FILL      CHAR(2)  INIT('  '),
+     3 NCS_CUST_NO_INC         FIXED BIN(63) INIT(0),
+     3 NCS_CUST_NO_VALUE       FIXED BIN(63) INIT(0),
+     3 NCS_CUST_NO_RESP        CHAR(2)  INIT('00');
+
+   /*****************************************************************/
+   /* Date/time working variables                                   */
+   /*****************************************************************/
+   DCL WS_CURRENT_DATE_DATA     CHAR(21) INIT(' ');
+   DCL WS_CURRENT_DATE_9        PIC'(8)9' INIT(0);
+   DCL WS_TODAY_INT             FIXED BIN(31) INIT(0);
+   DCL WS_NEW_REVIEW_DATE_INT   FIXED BIN(31) INIT(0);
+   DCL WS_NEW_REVIEW_YYYYMMDD   CHAR(8) INIT(' ');
+   DCL WS_REVIEW_DATE_ADD       FIXED BIN(15) INIT(0);
+   DCL WS_SEED                  FIXED DEC(15,0) INIT(0);
+   DCL WS_TODAY_LILLIAN         FIXED BIN(31) INIT(0);
+   DCL WS_TODAY_SECONDS         FLOAT DEC(16) INIT(0);
+   DCL 1 WS_TODAY_GREGORIAN,
+         3 WS_TODAY_G_YEAR      CHAR(4),
+         3 WS_TODAY_G_MONTH     CHAR(2),
+         3 WS_TODAY_G_DAY       CHAR(2),
+         3 WS_TODAY_G_HOURS     CHAR(2),
+         3 WS_TODAY_G_MINUTES   CHAR(2),
+         3 WS_TODAY_G_SECONDS   CHAR(2),
+         3 WS_TODAY_G_MILLISECS CHAR(3);
+   DCL WS_DATE_OF_BIRTH_LILLIAN FIXED BIN(31) INIT(0);
+   DCL 1 DATE_OF_BIRTH_FORMAT,
+         3 DOBF_LENGTH          FIXED BIN(15) INIT(8),
+         3 DOBF_TEXT            CHAR(8) INIT('YYYYMMDD');
+   DCL 1 DATE_OF_BIRTH_CEEDAYS,
+         3 DOBC_LENGTH          FIXED BIN(15) INIT(8),
+         3 CEEDAYS_YEAR         CHAR(4),
+         3 CEEDAYS_MONTH        CHAR(2),
+         3 CEEDAYS_DAY          CHAR(2);
+   DCL 1 FC,
+         3 CONDITION_TOKEN_VALUE,
+           5 CASE1_CONDITION_ID,
+             7 SEVERITY         FIXED BIN(15),
+             7 MSG_NO           FIXED BIN(15),
+           5 CASE_SEV_CTL       CHAR(1),
+           5 FACILITY_ID        CHAR(3),
+         3 IS_INFO              FIXED BIN(31);
+   DCL CEE000 BIT(1) DEFINED(FACILITY_ID) POSITION(1);
+
+   /*****************************************************************/
+   /* Stored customer info for PROCTRAN description                 */
+   /*****************************************************************/
+   DCL STORED_SORTCODE    CHAR(6)   INIT(' ');
+   DCL STORED_CUSTNO      CHAR(10)  INIT(' ');
+   DCL STORED_NAME        CHAR(60)  INIT(' ');
+   DCL STORED_DOB         CHAR(10)  INIT(' ');
+   DCL WS_EIBTASKN12      CHAR(12)  INIT(' ');
+   DCL WS_ABEND_PGM       CHAR(8)   INIT('ABNDPROC');
+   DCL SQLCODE_DISPLAY    CHAR(9)   INIT(' ');
+
+   /*****************************************************************/
+   /* CUSTOMER key for lookups                                      */
+   /*****************************************************************/
+   DCL 1 CUSTOMER_KY2,
+     3 REQUIRED_SORT_CODE2   CHAR(6) INIT('000000'),
+     3 REQUIRED_CUST_NUMBER2 CHAR(10) INIT('0000000000');
+
+   /*****************************************************************/
+   /* Time working variable for WS-TIME-NOW                        */
+   /*****************************************************************/
+   DCL WS_TIME_NOW        CHAR(6)   INIT(' ');
+   DCL 1 WS_TIME_NOW_GRP  BASED(ADDR(WS_TIME_NOW)),
+         3 WS_TIME_NOW_HH  CHAR(2),
+         3 WS_TIME_NOW_MM  CHAR(2),
+         3 WS_TIME_NOW_SS  CHAR(2);
+
+   /*****************************************************************/
+   /* External LE routines                                          */
+   /*****************************************************************/
+   DCL CEEDAYS  ENTRY OPTIONS(ASM INTER);
+   DCL CEELOCT  ENTRY OPTIONS(ASM INTER);
+
+   /******** PREMIERE (main) logic ***********************************/
+   /* Validate title */
+   WS_TITLE_VALID = 'N';
+   SELECT;
+     WHEN(COMM_TITLE = 'Professor ')
+       WS_TITLE_VALID = 'Y';
+     WHEN(COMM_TITLE = 'Mr        ')
+       WS_TITLE_VALID = 'Y';
+     WHEN(COMM_TITLE = 'Mrs       ')
+       WS_TITLE_VALID = 'Y';
+     WHEN(COMM_TITLE = 'Miss      ')
+       WS_TITLE_VALID = 'Y';
+     WHEN(COMM_TITLE = 'Ms        ')
+       WS_TITLE_VALID = 'Y';
+     WHEN(COMM_TITLE = 'Dr        ')
+       WS_TITLE_VALID = 'Y';
+     WHEN(COMM_TITLE = 'Drs       ')
+       WS_TITLE_VALID = 'Y';
+     WHEN(COMM_TITLE = 'Lord      ')
+       WS_TITLE_VALID = 'Y';
+     WHEN(COMM_TITLE = 'Sir       ')
+       WS_TITLE_VALID = 'Y';
+     WHEN(COMM_TITLE = 'Lady      ')
+       WS_TITLE_VALID = 'Y';
+     WHEN(COMM_TITLE = '          ')
+       WS_TITLE_VALID = 'Y';
+     OTHERWISE
+       WS_TITLE_VALID = 'N';
+   END;
+
+   IF WS_TITLE_VALID = 'N' THEN DO;
+     COMM_SUCCESS = 'N';
+     COMM_FAIL_CODE = 'T';
+     RETURN;
+   END;
+
+   CALL POPULATE_TIME_DATE;
+   CALL CREDIT_CHECK;
+
+   IF WS_CREDIT_CHECK_ERR = 'Y' THEN DO;
+     COMM_CREDIT_SCORE = '000';
+     COMM_CS_REVIEW_DAY   = WS_ORIG_DATE_DD;
+     COMM_CS_REVIEW_MONTH = WS_ORIG_DATE_MM;
+     COMM_CS_REVIEW_YEAR  = WS_ORIG_DATE_YYYY;
+     COMM_SUCCESS = 'N';
+     COMM_FAIL_CODE = 'G';
+     CALL GET_ME_OUT_OF_HERE;
+   END;
+
+   CALL DATE_OF_BIRTH_CHECK;
+
+   IF WS_DATE_OF_BIRTH_ERR = 'Y' THEN DO;
+     COMM_SUCCESS = 'N';
+     CALL GET_ME_OUT_OF_HERE;
+   END;
+
+   CALL ENQ_NAMED_COUNTER;
+   CALL UPD_NCS;
+   CALL WRITE_CUSTOMER_DB2;
+   CALL GET_ME_OUT_OF_HERE;
+
+   /********** POPULATE_TIME_DATE ************************************/
+   POPULATE_TIME_DATE: PROC;
+     EXEC CICS ASKTIME ABSTIME(WS_U_TIME);
+     EXEC CICS FORMATTIME
+          ABSTIME(WS_U_TIME)
+          DDMMYYYY(WS_ORIG_DATE)
+          TIME(PROC_TRAN_TIME)
+          DATESEP;
+   END POPULATE_TIME_DATE;
+
+   /********** ENQ_NAMED_COUNTER *************************************/
+   ENQ_NAMED_COUNTER: PROC;
+     NCS_CUST_NO_TEST_SORT = SORTCODE;
+     EXEC CICS ENQ
+          RESOURCE(NCS_CUST_NO_NAME)
+          LENGTH(16)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2);
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       COMM_SUCCESS = 'N';
+       COMM_FAIL_CODE = '3';
+       CALL GET_ME_OUT_OF_HERE;
+     END;
+   END ENQ_NAMED_COUNTER;
+
+   /********** DEQ_NAMED_COUNTER *************************************/
+   DEQ_NAMED_COUNTER: PROC;
+     NCS_CUST_NO_TEST_SORT = SORTCODE;
+     EXEC CICS DEQ
+          RESOURCE(NCS_CUST_NO_NAME)
+          LENGTH(16)
+          RESP(WS_CICS_RESP)
+          RESP2(WS_CICS_RESP2);
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       COMM_SUCCESS = 'N';
+       COMM_FAIL_CODE = '5';
+       CALL GET_ME_OUT_OF_HERE;
+     END;
+   END DEQ_NAMED_COUNTER;
+
+   /********** UPD_NCS ***********************************************/
+   UPD_NCS: PROC;
+     NCS_CUST_NO_INC = 1;
+     CALL GET_LAST_CUSTOMER_DB2;
+     NCS_CUST_NO_RESP = '00';
+   END UPD_NCS;
+
+   /********** CREDIT_CHECK ******************************************/
+   CREDIT_CHECK: PROC;
+     WS_CHANNEL_NAME = 'CIPCREDCHANN    ';
+     WS_CHILD_ISSUED_CNT = 0;
+     WS_PUT_CONT_LEN = LENGTH(DFHCOMMAREA);
+
+     DO WS_CC_CNT = 1 TO 5;
+       WS_RUN_TRANSID = 'OCR' || CHAR(WS_CC_CNT,1);
+
+       SELECT(WS_CC_CNT);
+         WHEN(1) WS_PUT_CONT_NAME = 'CIPA            ';
+         WHEN(2) WS_PUT_CONT_NAME = 'CIPB            ';
+         WHEN(3) WS_PUT_CONT_NAME = 'CIPC            ';
+         WHEN(4) WS_PUT_CONT_NAME = 'CIPD            ';
+         WHEN(5) WS_PUT_CONT_NAME = 'CIPE            ';
+         OTHERWISE WS_PUT_CONT_NAME = 'CIPF            ';
+       END;
+
+       EXEC CICS PUT CONTAINER(WS_PUT_CONT_NAME)
+            FROM(DFHCOMMAREA)
+            FLENGTH(WS_PUT_CONT_LEN)
+            CHANNEL(WS_CHANNEL_NAME)
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2);
+
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         COMM_SUCCESS = 'N';
+         COMM_FAIL_CODE = 'A';
+         CALL GET_ME_OUT_OF_HERE;
+       END;
+
+       EXEC CICS RUN TRANSID(WS_RUN_TRANSID)
+            CHANNEL(WS_CHANNEL_NAME)
+            CHILD(WS_ANY_CHILD_TKN)
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2);
+
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         COMM_SUCCESS = 'N';
+         COMM_FAIL_CODE = 'B';
+         CALL GET_ME_OUT_OF_HERE;
+       END;
+
+       WS_CHILD_ISSUED_CNT = WS_CHILD_ISSUED_CNT + 1;
+       WS_CHILD_CHAN(WS_CHILD_ISSUED_CNT) = WS_CHANNEL_NAME;
+       WS_CHILD_TKN(WS_CHILD_ISSUED_CNT) = WS_ANY_CHILD_TKN;
+     END;
+
+     EXEC CICS DELAY FOR SECONDS(3);
+
+     WS_FINISHED_FETCHING = 'N';
+     WS_RETRIEVED_CNT = 0;
+     WS_TOTAL_CS_SCR = 0;
+
+     DO WHILE(WS_FINISHED_FETCHING = 'N');
+       WS_ANY_CHILD_FETCH_ABCODE = ' ';
+
+       EXEC CICS FETCH ANY(WS_ANY_CHILD_FETCH_TKN)
+            CHANNEL(WS_ANY_CHILD_FETCH_CHAN)
+            NOSUSPEND
+            COMPSTATUS(WS_CHILD_FETCH_COMPST)
+            ABCODE(WS_ANY_CHILD_FETCH_ABCODE)
+            RESP(WS_CICS_RESP)
+            RESP2(WS_CICS_RESP2);
+
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         /* NOTFINISHED: some children did not reply in time */
+         IF WS_CICS_RESP = DFHRESP(NOTFINISHED) &
+            WS_CICS_RESP2 = 52 THEN DO;
+           IF WS_RETRIEVED_CNT = 0 THEN DO;
+             WS_FINISHED_FETCHING = 'Y';
+             COMM_CREDIT_SCORE = '000';
+             WS_CREDIT_CHECK_ERR = 'Y';
+             COMM_CS_REVIEW_DAY   = WS_ORIG_DATE_DD;
+             COMM_CS_REVIEW_MONTH = WS_ORIG_DATE_MM;
+             COMM_CS_REVIEW_YEAR  = WS_ORIG_DATE_YYYY;
+             COMM_SUCCESS = 'N';
+             COMM_FAIL_CODE = 'C';
+             CALL GET_ME_OUT_OF_HERE;
+           END;
+           ELSE DO;
+             WS_FINISHED_FETCHING = 'Y';
+             WS_CREDIT_CHECK_ERR = 'N';
+             CALL COMPUTE_AVG_SCORE;
+           END;
+         END;
+         /* INVREQ: parent had no children */
+         IF WS_CICS_RESP = DFHRESP(INVREQ) &
+            WS_CICS_RESP2 = 1 THEN DO;
+           COMM_CREDIT_SCORE = '000';
+           COMM_CS_REVIEW_DAY   = WS_ORIG_DATE_DD;
+           COMM_CS_REVIEW_MONTH = WS_ORIG_DATE_MM;
+           COMM_CS_REVIEW_YEAR  = WS_ORIG_DATE_YYYY;
+           COMM_SUCCESS = 'N';
+           COMM_FAIL_CODE = 'D';
+           CALL GET_ME_OUT_OF_HERE;
+         END;
+         /* NOTFND: all children fetched */
+         IF WS_CICS_RESP = DFHRESP(NOTFND) &
+            WS_CICS_RESP2 = 1 THEN DO;
+           IF WS_RETRIEVED_CNT = 0 THEN DO;
+             WS_FINISHED_FETCHING = 'Y';
+             COMM_CREDIT_SCORE = '000';
+             COMM_CS_REVIEW_DAY   = WS_ORIG_DATE_DD;
+             COMM_CS_REVIEW_MONTH = WS_ORIG_DATE_MM;
+             COMM_CS_REVIEW_YEAR  = WS_ORIG_DATE_YYYY;
+             WS_CREDIT_CHECK_ERR = 'Y';
+           END;
+           ELSE DO;
+             WS_FINISHED_FETCHING = 'Y';
+             WS_CREDIT_CHECK_ERR = 'N';
+             CALL COMPUTE_AVG_SCORE;
+           END;
+         END;
+       END;
+       ELSE DO;
+         /* NORMAL response - check COMPSTATUS */
+         SELECT(WS_CHILD_FETCH_COMPST);
+           WHEN(DFHVALUE(NORMAL)) DO;
+             /* Determine which container to read */
+             SELECT;
+               WHEN(WS_ANY_CHILD_FETCH_TKN=WS_CHILD_TKN(1))
+                 WS_CONTAINER_NAME = 'CIPA            ';
+               WHEN(WS_ANY_CHILD_FETCH_TKN=WS_CHILD_TKN(2))
+                 WS_CONTAINER_NAME = 'CIPB            ';
+               WHEN(WS_ANY_CHILD_FETCH_TKN=WS_CHILD_TKN(3))
+                 WS_CONTAINER_NAME = 'CIPC            ';
+               WHEN(WS_ANY_CHILD_FETCH_TKN=WS_CHILD_TKN(4))
+                 WS_CONTAINER_NAME = 'CIPD            ';
+               WHEN(WS_ANY_CHILD_FETCH_TKN=WS_CHILD_TKN(5))
+                 WS_CONTAINER_NAME = 'CIPE            ';
+               OTHERWISE
+                 WS_CONTAINER_NAME = 'CIPF            ';
+             END;
+             WS_CHILD_CONTAINER_LEN = LENGTH(WS_CHILD_DATA);
+             EXEC CICS GET CONTAINER(WS_CONTAINER_NAME)
+                  CHANNEL(WS_ANY_CHILD_FETCH_CHAN)
+                  INTO(WS_CHILD_DATA)
+                  FLENGTH(WS_CHILD_CONTAINER_LEN)
+                  RESP(WS_CICS_RESP)
+                  RESP2(WS_CICS_RESP2);
+             IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+               COMM_CREDIT_SCORE = '000';
+               COMM_CS_REVIEW_DAY   = WS_ORIG_DATE_DD;
+               COMM_CS_REVIEW_MONTH = WS_ORIG_DATE_MM;
+               COMM_CS_REVIEW_YEAR  = WS_ORIG_DATE_YYYY;
+               COMM_SUCCESS = 'N';
+               COMM_FAIL_CODE = 'E';
+               CALL GET_ME_OUT_OF_HERE;
+             END;
+             WS_RETRIEVED_CNT = WS_RETRIEVED_CNT + 1;
+             WS_TOTAL_CS_SCR = WS_TOTAL_CS_SCR +
+                               DECIMAL(WS_CHILD_CREDIT_SCORE,3,0);
+           END;
+           WHEN(DFHVALUE(ABEND)) DO;
+             COMM_CREDIT_SCORE = '000';
+             COMM_CS_REVIEW_DAY   = WS_ORIG_DATE_DD;
+             COMM_CS_REVIEW_MONTH = WS_ORIG_DATE_MM;
+             COMM_CS_REVIEW_YEAR  = WS_ORIG_DATE_YYYY;
+             COMM_SUCCESS = 'N';
+             COMM_FAIL_CODE = 'F';
+             CALL GET_ME_OUT_OF_HERE;
+           END;
+           WHEN(DFHVALUE(SECERROR)) DO;
+             COMM_CREDIT_SCORE = '000';
+             COMM_CS_REVIEW_DAY   = WS_ORIG_DATE_DD;
+             COMM_CS_REVIEW_MONTH = WS_ORIG_DATE_MM;
+             COMM_CS_REVIEW_YEAR  = WS_ORIG_DATE_YYYY;
+             COMM_SUCCESS = 'N';
+             COMM_FAIL_CODE = 'G';
+             CALL GET_ME_OUT_OF_HERE;
+           END;
+           OTHERWISE DO;
+             COMM_CREDIT_SCORE = '000';
+             COMM_CS_REVIEW_DAY   = WS_ORIG_DATE_DD;
+             COMM_CS_REVIEW_MONTH = WS_ORIG_DATE_MM;
+             COMM_CS_REVIEW_YEAR  = WS_ORIG_DATE_YYYY;
+             COMM_SUCCESS = 'N';
+             COMM_FAIL_CODE = 'H';
+             CALL GET_ME_OUT_OF_HERE;
+           END;
+         END;
+       END;
+     END;
+   END CREDIT_CHECK;
+
+   /*** COMPUTE_AVG_SCORE - helper called from CREDIT_CHECK *********/
+   COMPUTE_AVG_SCORE: PROC;
+     DCL TODAY_INT_L FIXED BIN(31);
+     DCL REVIEW_INT  FIXED BIN(31);
+     WS_ACTUAL_CS_SCR = WS_TOTAL_CS_SCR / WS_RETRIEVED_CNT;
+     COMM_CREDIT_SCORE =
+       RIGHT(CHAR(WS_ACTUAL_CS_SCR), 3, '0');
+     WS_CURRENT_DATE_DATA = DATETIME();
+     WS_CURRENT_DATE_9 =
+       SUBSTR(WS_CURRENT_DATE_DATA,1,8);
+     TODAY_INT_L =
+       DAYS(CHAR(WS_CURRENT_DATE_9,8),'YYYYMMDD');
+     WS_SEED = EIBTASKN;
+     WS_REVIEW_DATE_ADD = MOD(ABS(WS_SEED),21) + 1;
+     REVIEW_INT = TODAY_INT_L + WS_REVIEW_DATE_ADD;
+     WS_NEW_REVIEW_YYYYMMDD =
+       DAYSTODATE(REVIEW_INT,'YYYYMMDD');
+     COMM_CS_REVIEW_YEAR  = SUBSTR(WS_NEW_REVIEW_YYYYMMDD,1,4);
+     COMM_CS_REVIEW_MONTH = SUBSTR(WS_NEW_REVIEW_YYYYMMDD,5,2);
+     COMM_CS_REVIEW_DAY   = SUBSTR(WS_NEW_REVIEW_YYYYMMDD,7,2);
+   END COMPUTE_AVG_SCORE;
+
+   /********** WRITE_CUSTOMER_DB2 ************************************/
+   WRITE_CUSTOMER_DB2: PROC;
+     OUTPUT_DATA = '';                /* INITIALIZE */
+     HOST_CUSTOMER_ROW = '';
+
+     CUSTOMER_EYECATCHER = 'CUST';
+     CUSTOMER_SORTCODE   = SORTCODE;
+     CUSTOMER_NUMBER     = CHAR(NCS_CUST_NO_VALUE, 10);
+     CUSTOMER_TITLE      = COMM_TITLE;
+     CUSTOMER_FIRST_NAME = COMM_FIRST_NAME;
+     CUSTOMER_LAST_NAME  = COMM_LAST_NAME;
+     CUSTOMER_DOB_DAY    = COMM_DOB_DAY;
+     CUSTOMER_DOB_MONTH  = COMM_DOB_MONTH;
+     CUSTOMER_DOB_YEAR   = COMM_DOB_YEAR;
+     CUSTOMER_PHONE      = COMM_PHONE;
+     CUSTOMER_ADDR_LINE1 = COMM_ADDR_LINE1;
+     CUSTOMER_ADDR_LINE2 = COMM_ADDR_LINE2;
+     CUSTOMER_CITY       = COMM_CITY;
+     CUSTOMER_POSTCODE   = COMM_POSTCODE;
+     CUSTOMER_COUNTRY    = COMM_COUNTRY;
+     CUSTOMER_STATUS     = COMM_STATUS;
+     CUSTOMER_CREDIT_SCORE    = COMM_CREDIT_SCORE;
+     CUSTOMER_CS_REVIEW_DAY   = COMM_CS_REVIEW_DAY;
+     CUSTOMER_CS_REVIEW_MONTH = COMM_CS_REVIEW_MONTH;
+     CUSTOMER_CS_REVIEW_YEAR  = COMM_CS_REVIEW_YEAR;
+
+     HV_CUSTOMER_EYECATCHER = 'CUST';
+     HV_CUSTOMER_SORTCODE   = SORTCODE;
+     WS_CUSTOMER_NO_NUM     = NCS_CUST_NO_VALUE;
+     HV_CUSTOMER_NUMBER     = CHAR(WS_CUSTOMER_NO_NUM, 10);
+     HV_CUSTOMER_TITLE      = COMM_TITLE;
+     HV_CUSTOMER_FIRST_NAME = COMM_FIRST_NAME;
+     HV_CUSTOMER_LAST_NAME  = COMM_LAST_NAME;
+     HV_CUSTOMER_DOB        =
+       (DECIMAL(COMM_DOB_YEAR,4,0) * 10000) +
+       (DECIMAL(COMM_DOB_MONTH,2,0) * 100) +
+        DECIMAL(COMM_DOB_DAY,2,0);
+     HV_CUSTOMER_PHONE      = COMM_PHONE;
+     HV_CUSTOMER_ADDR_LINE1 = COMM_ADDR_LINE1;
+     HV_CUSTOMER_ADDR_LINE2 = COMM_ADDR_LINE2;
+     HV_CUSTOMER_CITY       = COMM_CITY;
+     HV_CUSTOMER_POSTCODE   = COMM_POSTCODE;
+     HV_CUSTOMER_COUNTRY    = COMM_COUNTRY;
+     HV_CUSTOMER_STATUS     = COMM_STATUS;
+     HV_CUSTOMER_CREATE_DATE =
+       (DECIMAL(COMM_CREATED_YEAR,4,0) * 10000) +
+       (DECIMAL(COMM_CREATED_MONTH,2,0) * 100) +
+        DECIMAL(COMM_CREATED_DAY,2,0);
+     HV_CUSTOMER_CREDIT_SCORE =
+       DECIMAL(COMM_CREDIT_SCORE, 3, 0);
+     HV_CUSTOMER_CS_REVIEW_DATE =
+       (DECIMAL(COMM_CS_REVIEW_YEAR,4,0) * 10000) +
+       (DECIMAL(COMM_CS_REVIEW_MONTH,2,0) * 100) +
+        DECIMAL(COMM_CS_REVIEW_DAY,2,0);
+
+     EXEC SQL
+       INSERT INTO CUSTOMER
+          (CUSTOMER_EYECATCHER,
+           CUSTOMER_SORTCODE,
+           CUSTOMER_NUMBER,
+           CUSTOMER_TITLE,
+           CUSTOMER_FIRST_NAME,
+           CUSTOMER_LAST_NAME,
+           CUSTOMER_DATE_OF_BIRTH,
+           CUSTOMER_PHONE,
+           CUSTOMER_ADDR_LINE1,
+           CUSTOMER_ADDR_LINE2,
+           CUSTOMER_CITY,
+           CUSTOMER_POSTCODE,
+           CUSTOMER_COUNTRY,
+           CUSTOMER_STATUS,
+           CUSTOMER_CREATED_DATE,
+           CUSTOMER_CREDIT_SCORE,
+           CUSTOMER_CS_REVIEW_DATE)
+       VALUES
+          (:HV_CUSTOMER_EYECATCHER,
+           :HV_CUSTOMER_SORTCODE,
+           :HV_CUSTOMER_NUMBER,
+           :HV_CUSTOMER_TITLE,
+           :HV_CUSTOMER_FIRST_NAME,
+           :HV_CUSTOMER_LAST_NAME,
+           :HV_CUSTOMER_DOB,
+           :HV_CUSTOMER_PHONE,
+           :HV_CUSTOMER_ADDR_LINE1,
+           :HV_CUSTOMER_ADDR_LINE2,
+           :HV_CUSTOMER_CITY,
+           :HV_CUSTOMER_POSTCODE,
+           :HV_CUSTOMER_COUNTRY,
+           :HV_CUSTOMER_STATUS,
+           :HV_CUSTOMER_CREATE_DATE,
+           :HV_CUSTOMER_CREDIT_SCORE,
+           :HV_CUSTOMER_CS_REVIEW_DATE);
+
+     IF SQLCODE ^= 0 THEN DO;
+       SQLCODE_DISPLAY = CHAR(SQLCODE, 9);
+       COMM_SUCCESS = 'N';
+       COMM_FAIL_CODE = '1';
+       CALL DEQ_NAMED_COUNTER;
+       CALL GET_ME_OUT_OF_HERE;
+     END;
+
+     STORED_SORTCODE = CUSTOMER_SORTCODE;
+     STORED_CUSTNO   = CUSTOMER_NUMBER;
+     STORED_NAME     = TRIM(CUSTOMER_FIRST_NAME) ||
+                       ' ' ||
+                       TRIM(CUSTOMER_LAST_NAME);
+     STORED_DOB      = CUSTOMER_DOB_DAY ||
+                       '/' ||
+                       CUSTOMER_DOB_MONTH ||
+                       '/' ||
+                       CUSTOMER_DOB_YEAR;
+
+     CALL WRITE_PROCTRAN;
+     CALL DEQ_NAMED_COUNTER;
+
+     COMM_SORTCODE  = CUSTOMER_SORTCODE;
+     COMM_NUMBER    = CUSTOMER_NUMBER;
+     COMM_EYECATCHER = 'CUST';
+     COMM_SUCCESS   = 'Y';
+     COMM_FAIL_CODE = ' ';
+   END WRITE_CUSTOMER_DB2;
+
+   /********** WRITE_PROCTRAN ****************************************/
+   WRITE_PROCTRAN: PROC;
+     CALL WRITE_PROCTRAN_DB2;
+   END WRITE_PROCTRAN;
+
+   /********** WRITE_PROCTRAN_DB2 ************************************/
+   WRITE_PROCTRAN_DB2: PROC;
+     HOST_PROCTRAN_ROW = '';
+     WS_EIBTASKN12     = ' ';
+
+     HV_PROCTRAN_EYECATCHER = 'PRTR';
+     HV_PROCTRAN_SORT_CODE  = SORTCODE;
+     HV_PROCTRAN_ACC_NUMBER = '00000000';
+
+     WS_EIBTASKN12 = CHAR(EIBTASKN, 12);
+     HV_PROCTRAN_REF = WS_EIBTASKN12;
+
+     EXEC CICS ASKTIME ABSTIME(WS_U_TIME);
+     EXEC CICS FORMATTIME
+          ABSTIME(WS_U_TIME)
+          DDMMYYYY(WS_ORIG_DATE)
+          TIME(HV_PROCTRAN_TIME)
+          DATESEP('.');
+
+     WS_ORIG_DATE_DD_X   = WS_ORIG_DATE_DD;
+     WS_ORIG_DATE_MM_X   = WS_ORIG_DATE_MM;
+     WS_ORIG_DATE_YYYY_X = WS_ORIG_DATE_YYYY;
+     HV_PROCTRAN_DATE =
+       WS_ORIG_DATE_DD_X ||
+       WS_ORIG_DATE_DOT1 ||
+       WS_ORIG_DATE_MM_X ||
+       WS_ORIG_DATE_DOT2 ||
+       WS_ORIG_DATE_YYYY_X;
+
+     SUBSTR(HV_PROCTRAN_DESC, 1, 6)  = STORED_SORTCODE;
+     SUBSTR(HV_PROCTRAN_DESC, 7, 10) = STORED_CUSTNO;
+     SUBSTR(HV_PROCTRAN_DESC,17, 14) = SUBSTR(STORED_NAME,1,14);
+     SUBSTR(HV_PROCTRAN_DESC,31, 10) = STORED_DOB;
+
+     HV_PROCTRAN_TYPE   = 'OCC';
+     HV_PROCTRAN_AMOUNT = 0;
+
+     EXEC SQL
+       INSERT INTO PROCTRAN
+              (PROCTRAN_EYECATCHER,
+               PROCTRAN_SORTCODE,
+               PROCTRAN_NUMBER,
+               PROCTRAN_DATE,
+               PROCTRAN_TIME,
+               PROCTRAN_REF,
+               PROCTRAN_TYPE,
+               PROCTRAN_DESC,
+               PROCTRAN_AMOUNT)
+       VALUES
+              (:HV_PROCTRAN_EYECATCHER,
+               :HV_PROCTRAN_SORT_CODE,
+               :HV_PROCTRAN_ACC_NUMBER,
+               :HV_PROCTRAN_DATE,
+               :HV_PROCTRAN_TIME,
+               :HV_PROCTRAN_REF,
+               :HV_PROCTRAN_TYPE,
+               :HV_PROCTRAN_DESC,
+               :HV_PROCTRAN_AMOUNT);
+
+     IF SQLCODE ^= 0 THEN DO;
+       SQLCODE_DISPLAY = CHAR(SQLCODE, 9);
+       ABNDINFO_REC = '';
+       ABND_RESPCODE = CHAR(EIBRESP, 9);
+       ABND_RESP2CODE = CHAR(EIBRESP2, 9);
+       EXEC CICS ASSIGN APPLID(ABND_APPLID);
+       ABND_TASKNO_KEY = CHAR(EIBTASKN, 4);
+       ABND_TRANID = EIBTRNID;
+       CALL POPULATE_TIME_DATE2;
+       ABND_DATE = WS_ORIG_DATE;
+       ABND_TIME = WS_TIME_NOW_HH || ':' ||
+                   WS_TIME_NOW_MM || ':' ||
+                   WS_TIME_NOW_SS;
+       ABND_UTIME_KEY = WS_U_TIME;
+       ABND_CODE = 'HWPT';
+       EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM);
+       ABND_SQLCODE = SQLCODE_DISPLAY;
+       ABND_FREEFORM =
+         'WPD010 - Unable to write PROCTRAN DB2: ' ||
+         CHAR(HV_PROCTRAN_SORT_CODE) ||
+         ' RESP=' || ABND_RESPCODE;
+       EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+            COMMAREA(ABNDINFO_REC);
+       CALL DEQ_NAMED_COUNTER;
+       EXEC CICS ABEND ABCODE('HWPT');
+     END;
+   END WRITE_PROCTRAN_DB2;
+
+   /********** GET_ME_OUT_OF_HERE ************************************/
+   GET_ME_OUT_OF_HERE: PROC;
+     EXEC CICS RETURN;
+   END GET_ME_OUT_OF_HERE;
+
+   /********** GET_LAST_CUSTOMER_DB2 *********************************/
+   GET_LAST_CUSTOMER_DB2: PROC;
+     HV_CONTROL_NAME = ' ';
+     NCS_CUST_NO_TEST_SORT = SORTCODE;
+     HV_CONTROL_NAME =
+       NCS_CUST_NO_ACT_NAME ||
+       NCS_CUST_NO_TEST_SORT ||
+       NCS_CUST_NO_FILL;
+
+     EXEC SQL
+       SELECT CONTROL_VALUE_NUM
+         INTO :HV_CONTROL_VALUE_NUM
+         FROM CONTROL
+        WHERE CONTROL_NAME = :HV_CONTROL_NAME;
+
+     IF SQLCODE ^= 0 THEN DO;
+       SQLCODE_DISPLAY = CHAR(SQLCODE, 9);
+       COMM_SUCCESS = 'N';
+       COMM_FAIL_CODE = '4';
+       CALL DEQ_NAMED_COUNTER;
+       CALL GET_ME_OUT_OF_HERE;
+     END;
+
+     HV_CONTROL_VALUE_NUM = HV_CONTROL_VALUE_NUM + 1;
+
+     EXEC SQL
+       UPDATE CONTROL
+          SET CONTROL_VALUE_NUM = :HV_CONTROL_VALUE_NUM
+        WHERE CONTROL_NAME = :HV_CONTROL_NAME;
+
+     IF SQLCODE ^= 0 THEN DO;
+       SQLCODE_DISPLAY = CHAR(SQLCODE, 9);
+       COMM_SUCCESS = 'N';
+       COMM_FAIL_CODE = '4';
+       CALL DEQ_NAMED_COUNTER;
+       CALL GET_ME_OUT_OF_HERE;
+     END;
+
+     WS_CUSTOMER_NO_NUM     = HV_CONTROL_VALUE_NUM;
+     COMM_NUMBER            = CHAR(WS_CUSTOMER_NO_NUM, 10);
+     CUSTOMER_NUMBER        = COMM_NUMBER;
+     REQUIRED_CUST_NUMBER2  = COMM_NUMBER;
+     NCS_CUST_NO_VALUE      = HV_CONTROL_VALUE_NUM;
+   END GET_LAST_CUSTOMER_DB2;
+
+   /********** DATE_OF_BIRTH_CHECK ***********************************/
+   DATE_OF_BIRTH_CHECK: PROC;
+     IF DECIMAL(COMM_DOB_YEAR,4,0) < 1601 THEN DO;
+       WS_DATE_OF_BIRTH_ERR = 'Y';
+       COMM_FAIL_CODE = 'O';
+       RETURN;
+     END;
+
+     CEEDAYS_YEAR  = COMM_DOB_YEAR;
+     CEEDAYS_MONTH = COMM_DOB_MONTH;
+     CEEDAYS_DAY   = COMM_DOB_DAY;
+
+     CALL CEEDAYS(DATE_OF_BIRTH_CEEDAYS,
+                  DATE_OF_BIRTH_FORMAT,
+                  WS_DATE_OF_BIRTH_LILLIAN,
+                  FC);
+
+     IF CEE000 ^= '1'B THEN DO;
+       WS_DATE_OF_BIRTH_ERR = 'Y';
+       COMM_FAIL_CODE = 'Z';
+       RETURN;
+     END;
+
+     CALL CEELOCT(WS_TODAY_LILLIAN,
+                  WS_TODAY_SECONDS,
+                  WS_TODAY_GREGORIAN,
+                  FC);
+
+     IF CEE000 ^= '1'B THEN DO;
+       WS_DATE_OF_BIRTH_ERR = 'Y';
+       RETURN;
+     END;
+
+     IF (DECIMAL(WS_TODAY_G_YEAR,4,0) -
+         DECIMAL(COMM_DOB_YEAR,4,0)) > 150 THEN DO;
+       WS_DATE_OF_BIRTH_ERR = 'Y';
+       COMM_FAIL_CODE = 'O';
+       RETURN;
+     END;
+
+     IF WS_TODAY_LILLIAN < WS_DATE_OF_BIRTH_LILLIAN THEN DO;
+       WS_DATE_OF_BIRTH_ERR = 'Y';
+       COMM_FAIL_CODE = 'Y';
+     END;
+   END DATE_OF_BIRTH_CHECK;
+
+   /********** POPULATE_TIME_DATE2 ***********************************/
+   POPULATE_TIME_DATE2: PROC;
+     EXEC CICS ASKTIME ABSTIME(WS_U_TIME);
+     EXEC CICS FORMATTIME
+          ABSTIME(WS_U_TIME)
+          DDMMYYYY(WS_ORIG_DATE)
+          TIME(WS_TIME_NOW)
+          DATESEP;
+   END POPULATE_TIME_DATE2;
+
+ END CRECUST;

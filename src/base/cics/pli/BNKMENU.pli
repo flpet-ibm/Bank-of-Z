@@ -1,0 +1,393 @@
+*PROCESS SYSTEM(CICS) MARGINS(1,72);
+ /***************************************************************** */
+ /*                                                                */
+ /*  Copyright IBM Corp. 2023                                      */
+ /*                                                                */
+ /***************************************************************** */
+ /***************************************************************** */
+ /* BNKMENU - Main menu handler for the CICS Banking Sample App   */
+ /* Transaction OMEN: displays menu, routes to sub-transactions   */
+ /***************************************************************** */
+ BNKMENU: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
+
+   DCL COMM_AREA_PTR POINTER;
+   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR),
+     3 DFHCOMMAREA_DATA CHAR(1);
+
+   /*****************************************************************/
+   /* BMS symbolic map                                              */
+   /*****************************************************************/
+   DCL 1 BNK1MEO,
+   %INCLUDE BNK1MAI;
+
+   /*****************************************************************/
+   /* AID key definitions                                           */
+   /*****************************************************************/
+   %INCLUDE DFHAID;
+
+   /*****************************************************************/
+   /* Working storage                                               */
+   /*****************************************************************/
+   DCL WS_CICS_RESP  FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2 FIXED BIN(31) INIT(0);
+
+   DCL 1 WS_FAIL_INFO,
+     3 WS_FAIL_PROG        CHAR(9)  INIT('BNKMENU  '),
+     3 WS_CICS_FAIL_MSG    CHAR(70) INIT(' '),
+     3 WS_FAIL_RESP_LBL    CHAR(6)  INIT(' RESP='),
+     3 WS_CICS_RESP_DISP   CHAR(10) INIT(' '),
+     3 WS_FAIL_RESP2_LBL   CHAR(7)  INIT(' RESP2='),
+     3 WS_CICS_RESP2_DISP  CHAR(10) INIT(' '),
+     3 WS_FAIL_ABEND_MSG   CHAR(15)
+                           INIT(' ABENDING TASK.');
+
+   /* Send flag: E=ERASE, D=DATAONLY, A=DATAONLY+ALARM */
+   DCL SEND_FLAG      CHAR(1) INIT('E');
+   DCL VALID_DATA_SW  CHAR(1) INIT('Y');
+
+   DCL END_OF_SESSION_MESSAGE CHAR(13) INIT('Session Ended');
+   DCL RESPONSE_CODE          FIXED BIN(31) INIT(0);
+   DCL COMMUNICATION_AREA     CHAR(1) INIT(' ');
+
+   /* Action selected by user */
+   DCL ACTION_CHAR    CHAR(1) INIT(' ');
+
+   /*****************************************************************/
+   /* Date/Time                                                     */
+   /*****************************************************************/
+   DCL WS_U_TIME     FIXED BIN(63) INIT(0);
+   DCL WS_ORIG_DATE  CHAR(10) INIT(' ');
+   DCL 1 WS_ORIG_DATE_GRP DEFINED(WS_ORIG_DATE),
+     3 WS_ORIG_DATE_DD   CHAR(2),
+     3 WS_ORIG_DATE_SEP1 CHAR(1),
+     3 WS_ORIG_DATE_MM   CHAR(2),
+     3 WS_ORIG_DATE_SEP2 CHAR(1),
+     3 WS_ORIG_DATE_YYYY CHAR(4);
+
+   DCL 1 WS_TIME_DATA,
+     3 WS_TIME_NOW CHAR(6) INIT(' '),
+     3 * DEFINED(WS_TIME_NOW),
+       5 WS_TIME_NOW_HH CHAR(2),
+       5 WS_TIME_NOW_MM CHAR(2),
+       5 WS_TIME_NOW_SS CHAR(2);
+
+   DCL WS_ABEND_PGM CHAR(8) INIT('ABNDPROC');
+
+   DCL 1 ABNDINFO_REC,
+   %INCLUDE ABNDINFO;
+
+   /*****************************************************************/
+   /* MAIN PROCEDURE                                                */
+   /*****************************************************************/
+   SELECT;
+     WHEN (EIBCALEN = 0) DO;
+       BNK1MEO = LOW(LENGTH(BNK1MEO));
+       ACTIONL = -1;
+       SEND_FLAG = 'E';
+       CALL SEND_MAP;
+     END;
+     WHEN (EIBAID = DFHPA1 | EIBAID = DFHPA2 |
+           EIBAID = DFHPA3) DO;
+       /* PA key - ignore */
+     END;
+     WHEN (EIBAID = DFHPF3 | EIBAID = DFHPF12) DO;
+       CALL SEND_TERMINATION_MSG;
+       EXEC CICS RETURN;
+     END;
+     WHEN (EIBAID = DFHCLEAR) DO;
+       EXEC CICS SEND CONTROL ERASE FREEKB;
+       EXEC CICS RETURN;
+     END;
+     WHEN (EIBAID = DFHENTER) DO;
+       CALL PROCESS_MENU_MAP;
+     END;
+     OTHERWISE DO;
+       BNK1MEO = LOW(LENGTH(BNK1MEO));
+       MESSAGEI = 'Invalid key pressed.';
+       ACTIONL = -1;
+       SEND_FLAG = 'A';
+       CALL SEND_MAP;
+     END;
+   END;
+
+   EXEC CICS RETURN
+        TRANSID('OMEN')
+        COMMAREA(COMMUNICATION_AREA)
+        LENGTH(1)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2);
+
+   IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+     WS_FAIL_INFO = '';
+     WS_FAIL_PROG = 'BNKMENU  ';
+     WS_CICS_FAIL_MSG =
+       'BNKMENU - A010 - RETURN TRANSID(MENU) FAIL';
+     WS_CICS_RESP_DISP  = CHAR(WS_CICS_RESP);
+     WS_CICS_RESP2_DISP = CHAR(WS_CICS_RESP2);
+     CALL SETUP_ABND_INFO('A010 - RETURN TRANSID(MENU) FAIL');
+     CALL ABEND_THIS_TASK;
+   END;
+
+   /*****************************************************************/
+   /* PROCESS_MENU_MAP - receive, validate, invoke transaction     */
+   /*****************************************************************/
+   PROCESS_MENU_MAP: PROC;
+     CALL RECEIVE_MENU_MAP;
+     CALL EDIT_MENU_DATA;
+     IF VALID_DATA_SW = 'Y' THEN
+       CALL INVOKE_OTHER_TXNS;
+     SEND_FLAG = 'A';
+     CALL SEND_MAP;
+   END PROCESS_MENU_MAP;
+
+   /*****************************************************************/
+   /* RECEIVE_MENU_MAP - receive BMS map                           */
+   /*****************************************************************/
+   RECEIVE_MENU_MAP: PROC;
+     EXEC CICS RECEIVE MAP('BNK1ME')
+               MAPSET('BNK1MAI')
+               INTO(BNK1MEO)
+               RESP(WS_CICS_RESP)
+               RESP2(WS_CICS_RESP2);
+
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       IF WS_CICS_RESP = DFHRESP(MAPFAIL) THEN DO;
+         BNK1MEO = LOW(LENGTH(BNK1MEO));
+         ACTIONL = -1;
+         SEND_FLAG = 'E';
+         CALL SEND_MAP;
+       END;
+       ELSE DO;
+         WS_FAIL_INFO = '';
+         WS_CICS_FAIL_MSG =
+           'BNKMENU - RMM010 - RECEIVE MAP FAIL';
+         WS_CICS_RESP_DISP  = CHAR(WS_CICS_RESP);
+         WS_CICS_RESP2_DISP = CHAR(WS_CICS_RESP2);
+         CALL SETUP_ABND_INFO('RMM010 - RECEIVE MAP FAIL');
+         CALL ABEND_THIS_TASK;
+       END;
+     END;
+   END RECEIVE_MENU_MAP;
+
+   /*****************************************************************/
+   /* EDIT_MENU_DATA - validate action key                         */
+   /*****************************************************************/
+   EDIT_MENU_DATA: PROC;
+     IF ACTIONI ^= '1' & ACTIONI ^= '2' &
+        ACTIONI ^= '3' & ACTIONI ^= '4' &
+        ACTIONI ^= '5' & ACTIONI ^= '6' &
+        ACTIONI ^= '7' & ACTIONI ^= 'A' THEN DO;
+       MESSAGEI = ' ';
+       MESSAGEI =
+         'You must enter a valid value (1-7 or A).';
+       VALID_DATA_SW = 'N';
+     END;
+     ELSE
+       ACTION_CHAR = ACTIONI;
+   END EDIT_MENU_DATA;
+
+   /*****************************************************************/
+   /* INVOKE_OTHER_TXNS - route to selected transaction            */
+   /*****************************************************************/
+   INVOKE_OTHER_TXNS: PROC;
+     IF ACTION_CHAR = '1' THEN DO;
+       EXEC CICS RETURN TRANSID('ODCS') IMMEDIATE
+            RESP(WS_CICS_RESP) RESP2(WS_CICS_RESP2);
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         CALL SETUP_ABND_INFO(
+           'IOT010 - RETURN TRANSID(ODCS) FAIL');
+         WS_CICS_FAIL_MSG =
+           'BNKMENU - IOT010 - RETURN TRANSID(ODCS) FAIL';
+         CALL ABEND_THIS_TASK;
+       END;
+     END;
+     IF ACTION_CHAR = '2' THEN DO;
+       EXEC CICS RETURN TRANSID('ODAC') IMMEDIATE
+            RESP(WS_CICS_RESP) RESP2(WS_CICS_RESP2);
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         CALL SETUP_ABND_INFO(
+           'IOT010 - RETURN TRANSID(ODAC) FAIL');
+         WS_CICS_FAIL_MSG =
+           'BNKMENU - IOT010 - RETURN TRANSID(ODAC) FAIL';
+         CALL ABEND_THIS_TASK;
+       END;
+     END;
+     IF ACTION_CHAR = '3' THEN DO;
+       EXEC CICS RETURN TRANSID('OCCS') IMMEDIATE
+            RESP(WS_CICS_RESP) RESP2(WS_CICS_RESP2);
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         CALL SETUP_ABND_INFO(
+           'IOT010 - RETURN TRANSID(OCCS) FAIL');
+         WS_CICS_FAIL_MSG =
+           'BNKMENU - IOT010 - RETURN TRANSID(OCCS) FAIL';
+         CALL ABEND_THIS_TASK;
+       END;
+     END;
+     IF ACTION_CHAR = '4' THEN DO;
+       EXEC CICS RETURN TRANSID('OCAC') IMMEDIATE
+            RESP(WS_CICS_RESP) RESP2(WS_CICS_RESP2);
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         CALL SETUP_ABND_INFO(
+           'IOT010 - RETURN TRANSID(OCAC) FAIL');
+         WS_CICS_FAIL_MSG =
+           'BNKMENU - IOT010 - RETURN TRANSID(OCAC) FAIL';
+         CALL ABEND_THIS_TASK;
+       END;
+     END;
+     IF ACTION_CHAR = '5' THEN DO;
+       EXEC CICS RETURN TRANSID('OUAC') IMMEDIATE
+            RESP(WS_CICS_RESP) RESP2(WS_CICS_RESP2);
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         CALL SETUP_ABND_INFO(
+           'IOT010 - RETURN TRANSID(OUAC) FAIL');
+         WS_CICS_FAIL_MSG =
+           'BNKMENU - IOT010 - RETURN TRANSID(OUAC) FAIL';
+         CALL ABEND_THIS_TASK;
+       END;
+     END;
+     IF ACTION_CHAR = '6' THEN DO;
+       EXEC CICS RETURN TRANSID('OCRA') IMMEDIATE
+            RESP(WS_CICS_RESP) RESP2(WS_CICS_RESP2);
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         CALL SETUP_ABND_INFO(
+           'IOT010 - RETURN TRANSID(OCRA) FAIL');
+         WS_CICS_FAIL_MSG =
+           'BNKMENU - IOT010 - RETURN TRANSID(OCRA) FAIL';
+         CALL ABEND_THIS_TASK;
+       END;
+     END;
+     IF ACTION_CHAR = '7' THEN DO;
+       EXEC CICS RETURN TRANSID('OTFN') IMMEDIATE
+            RESP(WS_CICS_RESP) RESP2(WS_CICS_RESP2);
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         CALL SETUP_ABND_INFO(
+           'IOT010 - RETURN TRANSID(OTFN) FAIL');
+         WS_CICS_FAIL_MSG =
+           'BNKMENU - IOT010 - RETURN TRANSID(OTFN) FAIL';
+         CALL ABEND_THIS_TASK;
+       END;
+     END;
+     IF ACTION_CHAR = 'A' THEN DO;
+       EXEC CICS RETURN TRANSID('OCCA') IMMEDIATE
+            RESP(WS_CICS_RESP) RESP2(WS_CICS_RESP2);
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         CALL SETUP_ABND_INFO(
+           'IOT010 - RETURN TRANSID(OCCA) FAIL');
+         WS_CICS_FAIL_MSG =
+           'BNKMENU - IOT010 - RETURN TRANSID(OCCA) FAIL';
+         CALL ABEND_THIS_TASK;
+       END;
+     END;
+   END INVOKE_OTHER_TXNS;
+
+   /*****************************************************************/
+   /* SEND_MAP - send BMS map                                      */
+   /*****************************************************************/
+   SEND_MAP: PROC;
+     IF SEND_FLAG = 'E' THEN DO;
+       EXEC CICS SEND MAP('BNK1ME')
+                 MAPSET('BNK1MAI')
+                 FROM(BNK1MEO)
+                 ERASE CURSOR FREEKB
+                 RESP(WS_CICS_RESP) RESP2(WS_CICS_RESP2);
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         WS_CICS_FAIL_MSG =
+           'BNKMENU - SMM010 - SEND MAP ERASE FAIL';
+         CALL SETUP_ABND_INFO('SMM010 - SEND MAP ERASE FAIL');
+         CALL ABEND_THIS_TASK;
+       END;
+       RETURN;
+     END;
+     IF SEND_FLAG = 'D' THEN DO;
+       EXEC CICS SEND MAP('BNK1ME')
+                 MAPSET('BNK1MAI')
+                 FROM(BNK1MEO)
+                 DATAONLY CURSOR FREEKB
+                 RESP(WS_CICS_RESP) RESP2(WS_CICS_RESP2);
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         WS_CICS_FAIL_MSG =
+           'BNKMENU - SMM010 - SEND MAP DATAONLY FAIL';
+         CALL SETUP_ABND_INFO(
+           'SMM010 - SEND MAP DATAONLY FAIL');
+         CALL ABEND_THIS_TASK;
+       END;
+       RETURN;
+     END;
+     IF SEND_FLAG = 'A' THEN DO;
+       EXEC CICS SEND MAP('BNK1ME')
+                 MAPSET('BNK1MAI')
+                 FROM(BNK1MEO)
+                 DATAONLY ALARM CURSOR FREEKB
+                 RESP(WS_CICS_RESP) RESP2(WS_CICS_RESP2);
+       IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+         WS_CICS_FAIL_MSG =
+           'BNKMENU - SMM010 - SEND MAP ALARM FAIL';
+         CALL SETUP_ABND_INFO(
+           'SMM010 - SEND MAP ALARM FAIL');
+         CALL ABEND_THIS_TASK;
+       END;
+     END;
+   END SEND_MAP;
+
+   /*****************************************************************/
+   /* SEND_TERMINATION_MSG - send session ended text               */
+   /*****************************************************************/
+   SEND_TERMINATION_MSG: PROC;
+     EXEC CICS SEND TEXT
+               FROM(END_OF_SESSION_MESSAGE)
+               ERASE FREEKB
+               RESP(WS_CICS_RESP) RESP2(WS_CICS_RESP2);
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+       WS_CICS_FAIL_MSG =
+         'BNKMENU - STM010 - SEND TEXT FAIL';
+       CALL SETUP_ABND_INFO('STM010 - SEND TEXT FAIL');
+       CALL ABEND_THIS_TASK;
+     END;
+   END SEND_TERMINATION_MSG;
+
+   /*****************************************************************/
+   /* ABEND_THIS_TASK - display fail info and abend                */
+   /*****************************************************************/
+   ABEND_THIS_TASK: PROC;
+     PUT SKIP LIST(WS_FAIL_INFO);
+     EXEC CICS ABEND ABCODE('HBNK') NODUMP;
+   END ABEND_THIS_TASK;
+
+   /*****************************************************************/
+   /* SETUP_ABND_INFO - populate ABNDINFO_REC                      */
+   /*****************************************************************/
+   SETUP_ABND_INFO: PROC (P_MSG);
+     DCL P_MSG CHAR(*);
+     ABNDINFO_REC = '';
+     ABND_RESPCODE  = EIBRESP;
+     ABND_RESP2CODE = EIBRESP2;
+     EXEC CICS ASSIGN APPLID(ABND_APPLID);
+     ABND_TASKNO_KEY = EIBTASKN;
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE = WS_ORIG_DATE;
+     ABND_TIME = WS_TIME_NOW_HH || ':' ||
+                 WS_TIME_NOW_MM || ':' || WS_TIME_NOW_SS;
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE = 'HBNK';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM);
+     ABND_SQLCODE = '0';
+     ABND_FREEFORM = SUBSTR(P_MSG || ' EIBRESP=' ||
+       CHAR(EIBRESP) || ' RESP2=' || CHAR(EIBRESP2),1,80);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+               COMMAREA(ABNDINFO_REC);
+   END SETUP_ABND_INFO;
+
+   /*****************************************************************/
+   /* POPULATE_TIME_DATE - get current date and time               */
+   /*****************************************************************/
+   POPULATE_TIME_DATE: PROC;
+     EXEC CICS ASKTIME ABSTIME(WS_U_TIME);
+     EXEC CICS FORMATTIME
+               ABSTIME(WS_U_TIME)
+               DDMMYYYY(WS_ORIG_DATE)
+               TIME(WS_TIME_NOW)
+               DATESEP;
+   END POPULATE_TIME_DATE;
+
+ END BNKMENU;

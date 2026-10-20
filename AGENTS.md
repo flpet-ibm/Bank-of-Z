@@ -15,8 +15,10 @@ Bank of Z is a hybrid banking app routing transactions through **CICS** (custome
 
 ```
 src/base/cics/cobol/   CICS COBOL programs
-src/base/cics/copy/    Copybooks for CICS path
+src/base/cics/copy/    Copybooks for CICS path (COBOL .cpy files)
 src/base/cics/bms/     BMS map definitions
+src/base/cics/pli/     CICS PL/I programs (.pli files)
+src/base/cics/plinc/   PL/I include files converted from CICS COBOL copybooks (.inc files)
 src/base/ims/cobol/    IMS COBOL programs
 src/base/ims/copy/     Copybooks for IMS path
 src/base/ims/pli/      IMS PL/I programs
@@ -98,6 +100,7 @@ A scanned program database is available at the path stored in `.bobz/local-setti
 - IMS PL/I programs use `*PROCESS SYSTEM(IMS);` at line 1
 - DCL IMS call codes as `CHAR(4)` with trailing spaces: `DCL GU CHAR(4) INIT('GU  ');`
 - PL/I dependency search uses `**/*.inc` pattern (not `*.cpy`)
+- CICS PL/I include files (converted from COBOL copybooks) are stored in `src/base/cics/plinc/` — use `%INCLUDE filename;` to reference them in programs
 - Comment syntax: every block comment opener `/*` must have a matching closer `*/` on the **same line**; the closing `*/` must end at or before column 72
 - DB2 `VARCHAR` columns must be declared as `CHAR(n) VAR` in PL/I host variable structures
 - *process statement must begin in column 1

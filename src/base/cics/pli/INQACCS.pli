@@ -1,0 +1,265 @@
+*PROCESS SYSTEM(CICS) SQL MARGINS(1,72);
+ /* **************************************************************** */
+ /*                                                                */
+ /*  Copyright IBM Corp. 2023                                      */
+ /*                                                                */
+ /* **************************************************************** */
+ /* INQACCS - Inquire all accounts for a sort code (up to 20).     */
+ /* Uses a DB2 cursor. Returns accounts in the COMMAREA array.     */
+ /* Converted from INQACCS.cbl                                     */
+ /* **************************************************************** */
+INQACCS: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
+
+   DCL COMM_AREA_PTR POINTER;
+
+   /* *************************************************************** */
+   /* DFHCOMMAREA - INQACCS COMMAREA                                 */
+   /* *************************************************************** */
+   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR),
+   %INCLUDE INQACCS;
+
+   /* *************************************************************** */
+   /* Sort code constant                                              */
+   /* *************************************************************** */
+   DCL SORTCODE CHAR(6) INIT('987654');
+
+   /* *************************************************************** */
+   /* DB2 table declarations                                         */
+   /* *************************************************************** */
+   EXEC SQL INCLUDE ACCDB2;
+
+   /* *************************************************************** */
+   /* ACCOUNT host variables for DB2                                 */
+   /* *************************************************************** */
+   DCL 1 HOST_ACCOUNT_ROW,
+     3 HV_ACCOUNT_EYECATCHER      CHAR(4),
+     3 HV_ACCOUNT_CUST_NO         CHAR(10),
+     3 HV_ACCOUNT_SORTCODE        CHAR(6),
+     3 HV_ACCOUNT_ACC_NO          CHAR(8),
+     3 HV_ACCOUNT_ACC_TYPE        CHAR(8),
+     3 HV_ACCOUNT_INT_RATE        FIXED DEC(6,2),
+     3 HV_ACCOUNT_OPENED          CHAR(10),
+     3 HV_ACCOUNT_OVERDRAFT_LIM   FIXED BIN(31),
+     3 HV_ACCOUNT_LAST_STMT       CHAR(10),
+     3 HV_ACCOUNT_NEXT_STMT       CHAR(10),
+     3 HV_ACCOUNT_AVAIL_BAL       FIXED DEC(12,2),
+     3 HV_ACCOUNT_ACTUAL_BAL      FIXED DEC(12,2);
+
+   /* *************************************************************** */
+   /* CURSOR declaration                                             */
+   /* *************************************************************** */
+   EXEC SQL DECLARE ACC_ALL_CURSOR CURSOR FOR
+      SELECT ACCOUNT_EYECATCHER,
+             ACCOUNT_CUSTOMER_NUMBER,
+             ACCOUNT_SORTCODE,
+             ACCOUNT_NUMBER,
+             ACCOUNT_TYPE,
+             ACCOUNT_INTEREST_RATE,
+             ACCOUNT_OPENED,
+             ACCOUNT_OVERDRAFT_LIMIT,
+             ACCOUNT_LAST_STATEMENT,
+             ACCOUNT_NEXT_STATEMENT,
+             ACCOUNT_AVAILABLE_BALANCE,
+             ACCOUNT_ACTUAL_BALANCE
+      FROM ACCOUNT
+      WHERE ACCOUNT_SORTCODE = :HV_ACCOUNT_SORTCODE
+      FOR FETCH ONLY;
+
+   /* *************************************************************** */
+   /* SQL Communication Area                                         */
+   /* *************************************************************** */
+   DCL 1 SQLCA,
+     3 SQLCAID     CHAR(8)          INIT('SQLCA   '),
+     3 SQLCABC     FIXED BIN(31)    INIT(136),
+     3 SQLCODE     FIXED BIN(31)    INIT(0),
+     3 SQLERRM,
+       5 SQLERRML  FIXED BIN(15)    INIT(0),
+       5 SQLERRMC  CHAR(70)         INIT(' '),
+     3 SQLERRP     CHAR(8)          INIT(' '),
+     3 SQLERRD    (6) FIXED BIN(31) INIT(0),
+     3 SQLWARN,
+       5 SQLWARN0  CHAR(1)          INIT(' '),
+       5 SQLWARN1  CHAR(1)          INIT(' '),
+       5 SQLWARN2  CHAR(1)          INIT(' '),
+       5 SQLWARN3  CHAR(1)          INIT(' '),
+       5 SQLWARN4  CHAR(1)          INIT(' '),
+       5 SQLWARN5  CHAR(1)          INIT(' '),
+       5 SQLWARN6  CHAR(1)          INIT(' '),
+       5 SQLWARN7  CHAR(1)          INIT(' '),
+     3 SQLSTATE    CHAR(5)          INIT(' ');
+
+   /* *************************************************************** */
+   /* Working variables                                              */
+   /* *************************************************************** */
+   DCL WS_CICS_RESP             FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2            FIXED BIN(31) INIT(0);
+   DCL SQLCODE_DISPLAY          CHAR(9)       INIT(' ');
+   DCL WS_STORM_DRAIN           CHAR(1)       INIT('N');
+   DCL STORM_DRAIN_CONDITION    CHAR(20)      INIT(' ');
+   DCL MY_ABEND_CODE            CHAR(4)       INIT(' ');
+
+   DCL 1 DB2_DATE_REFORMAT,
+     3 DB2_DATE_REF_YR           CHAR(4),
+     3 FILLER_D1                 CHAR(1),
+     3 DB2_DATE_REF_MNTH         CHAR(2),
+     3 FILLER_D2                 CHAR(1),
+     3 DB2_DATE_REF_DAY          CHAR(2);
+
+   /* *************************************************************** */
+   /* PREMIERE SECTION                                               */
+   /* *************************************************************** */
+   COMM_SUCCESS   = 'N';
+   COMM_FAIL_CODE = '0';
+
+   HV_ACCOUNT_SORTCODE = SORTCODE;
+
+   CALL READ_ACCOUNT_DB2;
+
+   CALL GET_ME_OUT_OF_HERE;
+
+   /* *************************************************************** */
+   /* READ_ACCOUNT_DB2                                               */
+   /* *************************************************************** */
+   READ_ACCOUNT_DB2: PROC;
+
+      EXEC SQL OPEN ACC_ALL_CURSOR;
+
+      SQLCODE_DISPLAY = SQLCODE;
+
+      IF SQLCODE ^= 0 THEN
+      DO;
+         CALL CHECK_FOR_STORM_DRAIN_DB2;
+         COMM_SUCCESS       = 'N';
+         COMM_FAIL_CODE     = '2';
+         NUMBER_OF_ACCOUNTS = 0;
+         EXEC CICS SYNCPOINT ROLLBACK
+              RESP(WS_CICS_RESP)
+              RESP2(WS_CICS_RESP2);
+         RETURN;
+      END;
+
+      CALL FETCH_DATA;
+
+      EXEC SQL CLOSE ACC_ALL_CURSOR;
+
+      IF SQLCODE ^= 0 THEN
+      DO;
+         SQLCODE_DISPLAY = SQLCODE;
+         PUT SKIP LIST('Failure closing DB2 CURSOR ACC_ALL_CURSOR. '
+                       || 'SQL code=' || SQLCODE_DISPLAY);
+         CALL CHECK_FOR_STORM_DRAIN_DB2;
+         COMM_SUCCESS   = 'N';
+         COMM_FAIL_CODE = '4';
+         EXEC CICS SYNCPOINT ROLLBACK
+              RESP(WS_CICS_RESP)
+              RESP2(WS_CICS_RESP2);
+         RETURN;
+      END;
+
+      COMM_SUCCESS = 'Y';
+
+   END READ_ACCOUNT_DB2;
+
+   /* *************************************************************** */
+   /* FETCH_DATA                                                     */
+   /* *************************************************************** */
+   FETCH_DATA: PROC;
+      DCL I FIXED BIN(31);
+
+      NUMBER_OF_ACCOUNTS = 0;
+
+      DO WHILE (SQLCODE = 0 & NUMBER_OF_ACCOUNTS < 20);
+
+         EXEC SQL FETCH FROM ACC_ALL_CURSOR
+         INTO :HV_ACCOUNT_EYECATCHER,
+              :HV_ACCOUNT_CUST_NO,
+              :HV_ACCOUNT_SORTCODE,
+              :HV_ACCOUNT_ACC_NO,
+              :HV_ACCOUNT_ACC_TYPE,
+              :HV_ACCOUNT_INT_RATE,
+              :HV_ACCOUNT_OPENED,
+              :HV_ACCOUNT_OVERDRAFT_LIM,
+              :HV_ACCOUNT_LAST_STMT,
+              :HV_ACCOUNT_NEXT_STMT,
+              :HV_ACCOUNT_AVAIL_BAL,
+              :HV_ACCOUNT_ACTUAL_BAL;
+
+         IF SQLCODE = 100 THEN
+         DO;
+            COMM_SUCCESS = 'Y';
+            RETURN;
+         END;
+
+         IF SQLCODE ^= 0 THEN
+         DO;
+            SQLCODE_DISPLAY = SQLCODE;
+            PUT SKIP LIST('Failure fetching from ACC_ALL_CURSOR. '
+                          || 'SQL code=' || SQLCODE_DISPLAY);
+            CALL CHECK_FOR_STORM_DRAIN_DB2;
+            COMM_SUCCESS       = 'N';
+            NUMBER_OF_ACCOUNTS = 0;
+            COMM_FAIL_CODE     = '3';
+            EXEC CICS SYNCPOINT ROLLBACK
+                 RESP(WS_CICS_RESP)
+                 RESP2(WS_CICS_RESP2);
+            RETURN;
+         END;
+
+         NUMBER_OF_ACCOUNTS = NUMBER_OF_ACCOUNTS + 1;
+         I = NUMBER_OF_ACCOUNTS;
+
+         COMM_EYE(I)      = HV_ACCOUNT_EYECATCHER;
+         COMM_CUSTNO(I)   = HV_ACCOUNT_CUST_NO;
+         COMM_SCODE(I)    = HV_ACCOUNT_SORTCODE;
+         COMM_ACCNO(I)    = HV_ACCOUNT_ACC_NO;
+         COMM_ACC_TYPE(I) = HV_ACCOUNT_ACC_TYPE;
+         COMM_INT_RATE(I) = HV_ACCOUNT_INT_RATE;
+
+         /* Reformat DB2 date YYYY-MM-DD → DDMMYYYY */
+         DB2_DATE_REFORMAT  = HV_ACCOUNT_OPENED;
+         COMM_OPENED(I) = DB2_DATE_REF_DAY ||
+                          DB2_DATE_REF_MNTH || DB2_DATE_REF_YR;
+
+         COMM_OVERDRAFT(I)    = HV_ACCOUNT_OVERDRAFT_LIM;
+
+         DB2_DATE_REFORMAT    = HV_ACCOUNT_LAST_STMT;
+         COMM_LAST_STMT_DT(I) = DB2_DATE_REF_DAY ||
+                                DB2_DATE_REF_MNTH || DB2_DATE_REF_YR;
+
+         DB2_DATE_REFORMAT    = HV_ACCOUNT_NEXT_STMT;
+         COMM_NEXT_STMT_DT(I) = DB2_DATE_REF_DAY ||
+                                DB2_DATE_REF_MNTH || DB2_DATE_REF_YR;
+
+         COMM_ACTUAL_BAL(I) = HV_ACCOUNT_ACTUAL_BAL;
+         COMM_AVAIL_BAL(I)  = HV_ACCOUNT_AVAIL_BAL;
+
+      END;
+
+   END FETCH_DATA;
+
+   /* *************************************************************** */
+   /* GET_ME_OUT_OF_HERE                                             */
+   /* *************************************************************** */
+   GET_ME_OUT_OF_HERE: PROC;
+      EXEC CICS RETURN;
+   END GET_ME_OUT_OF_HERE;
+
+   /* *************************************************************** */
+   /* CHECK_FOR_STORM_DRAIN_DB2                                      */
+   /* *************************************************************** */
+   CHECK_FOR_STORM_DRAIN_DB2: PROC;
+      SELECT (SQLCODE);
+         WHEN (923)
+            STORM_DRAIN_CONDITION = 'DB2 Connection lost ';
+         OTHERWISE
+            STORM_DRAIN_CONDITION = 'Not Storm Drain     ';
+      END;
+
+      IF STORM_DRAIN_CONDITION ^= 'Not Storm Drain     ' THEN
+         PUT SKIP LIST('INQACCS: Storm Drain condition ('
+                       || STORM_DRAIN_CONDITION || ') has been met ('
+                       || SQLCODE_DISPLAY || ').');
+
+   END CHECK_FOR_STORM_DRAIN_DB2;
+
+END INQACCS;

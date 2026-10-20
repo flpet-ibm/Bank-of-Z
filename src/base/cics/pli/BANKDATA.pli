@@ -1,0 +1,1022 @@
+ /***************************************************************** */
+ /*                                                                */
+ /*  Copyright IBM Corp. 2023                                      */
+ /*                                                                */
+ /***************************************************************** */
+ /***************************************************************** */
+ /* BANKDATA - Batch data population program                       */
+ /* Populates CUSTOMER, ACCOUNT, and CONTROL DB2 tables with      */
+ /* randomly generated test data.                                  */
+ /*                                                                */
+ /* Input parm: 'fffffff,ttttttt,sssssss,rrrrrrr'                  */
+ /*   f = start customer number, t = end, s = step, r = rand seed */
+ /***************************************************************** */
+*PROCESS SQL MARGINS(1,72);
+ BANKDATA: PROCEDURE OPTIONS(MAIN REENTRANT);
+
+   /*****************************************************************/
+   /* CUSTOMER DB2 table declaration                                */
+   /*****************************************************************/
+   EXEC SQL INCLUDE CUSTDB2;
+
+   /*****************************************************************/
+   /* ACCOUNT DB2 table declaration                                 */
+   /*****************************************************************/
+   EXEC SQL INCLUDE ACCDB2;
+
+   /*****************************************************************/
+   /* CONTROL DB2 table declaration                                 */
+   /*****************************************************************/
+   EXEC SQL INCLUDE CONTDB2;
+
+   /*****************************************************************/
+   /* SQLCA                                                         */
+   /*****************************************************************/
+   DCL 1 SQLCA,
+     3 SQLCAID    CHAR(8),
+     3 SQLCABC    FIXED BIN(31),
+     3 SQLCODE    FIXED BIN(31),
+     3 SQLERRM,
+       5 SQLERRML FIXED BIN(15),
+       5 SQLERRMC CHAR(70),
+     3 SQLERRP    CHAR(8),
+     3 SQLERRD    (6) FIXED BIN(31),
+     3 SQLWARN,
+       5 SQLWARN0 CHAR(1),
+       5 SQLWARN1 CHAR(1),
+       5 SQLWARN2 CHAR(1),
+       5 SQLWARN3 CHAR(1),
+       5 SQLWARN4 CHAR(1),
+       5 SQLWARN5 CHAR(1),
+       5 SQLWARN6 CHAR(1),
+       5 SQLWARN7 CHAR(1),
+     3 SQLSTATE   CHAR(5);
+
+   /*****************************************************************/
+   /* Sort code constant                                            */
+   /*****************************************************************/
+   %INCLUDE SORTCODE;
+
+   /*****************************************************************/
+   /* CUSTOMER host variables                                       */
+   /*****************************************************************/
+   DCL 1 HOST_CUSTOMER_ROW,
+     3 HV_CUSTOMER_EYECATCHER    CHAR(4),
+     3 HV_CUSTOMER_SORTCODE      CHAR(6),
+     3 HV_CUSTOMER_NUMBER        CHAR(10),
+     3 HV_CUSTOMER_TITLE         CHAR(10),
+     3 HV_CUSTOMER_FIRST_NAME    CHAR(50),
+     3 HV_CUSTOMER_LAST_NAME     CHAR(50),
+     3 HV_CUSTOMER_DOB           FIXED BIN(31),
+     3 HV_CUSTOMER_PHONE         CHAR(20),
+     3 HV_CUSTOMER_ADDR_LINE1    CHAR(50),
+     3 HV_CUSTOMER_ADDR_LINE2    CHAR(50),
+     3 HV_CUSTOMER_CITY          CHAR(50),
+     3 HV_CUSTOMER_POSTCODE      CHAR(10),
+     3 HV_CUSTOMER_COUNTRY       CHAR(50),
+     3 HV_CUSTOMER_STATUS        CHAR(10),
+     3 HV_CUSTOMER_CREATE_DATE   FIXED BIN(31),
+     3 HV_CUSTOMER_CREDIT_SCORE  FIXED BIN(15),
+     3 HV_CUSTOMER_CS_REVIEW_DATE FIXED BIN(31);
+
+   /*****************************************************************/
+   /* ACCOUNT host variables                                        */
+   /*****************************************************************/
+   DCL 1 HOST_ACCOUNT_ROW,
+     3 HV_ACCOUNT_EYECATCHER     CHAR(4),
+     3 HV_ACCOUNT_CUST_NO        CHAR(10),
+     3 HV_ACCOUNT_SORT_CODE      CHAR(6),
+     3 HV_ACCOUNT_NUMBER         CHAR(8),
+     3 HV_ACCOUNT_TYPE           CHAR(8),
+     3 HV_ACCOUNT_INTEREST_RATE  FIXED DEC(6,2),
+     3 * UNION,
+       5 HV_ACCOUNT_OPENED       CHAR(10),
+       5 HV_ACCOUNT_OPENED_GROUP,
+         7 HV_ACCOUNT_OPENED_DAY    CHAR(2),
+         7 HV_ACCOUNT_OPENED_DELIM1 CHAR(1),
+         7 HV_ACCOUNT_OPENED_MONTH  CHAR(2),
+         7 HV_ACCOUNT_OPENED_DELIM2 CHAR(1),
+         7 HV_ACCOUNT_OPENED_YEAR   CHAR(4),
+     3 HV_ACCOUNT_OVERDRAFT_LIMIT FIXED BIN(31),
+     3 * UNION,
+       5 HV_ACCOUNT_LAST_STMT_DATE CHAR(10),
+       5 HV_ACCOUNT_LAST_STMT_GROUP,
+         7 HV_ACCOUNT_LAST_STMT_DAY    CHAR(2),
+         7 HV_ACCOUNT_LAST_STMT_DELIM1 CHAR(1),
+         7 HV_ACCOUNT_LAST_STMT_MONTH  CHAR(2),
+         7 HV_ACCOUNT_LAST_STMT_DELIM2 CHAR(1),
+         7 HV_ACCOUNT_LAST_STMT_YEAR   CHAR(4),
+     3 * UNION,
+       5 HV_ACCOUNT_NEXT_STMT_DATE CHAR(10),
+       5 HV_ACCOUNT_NEXT_STMT_GROUP,
+         7 HV_ACCOUNT_NEXT_STMT_DAY    CHAR(2),
+         7 HV_ACCOUNT_NEXT_STMT_DELIM1 CHAR(1),
+         7 HV_ACCOUNT_NEXT_STMT_MONTH  CHAR(2),
+         7 HV_ACCOUNT_NEXT_STMT_DELIM2 CHAR(1),
+         7 HV_ACCOUNT_NEXT_STMT_YEAR   CHAR(4),
+     3 HV_ACCOUNT_AVAILABLE_BALANCE FIXED DEC(12,2),
+     3 HV_ACCOUNT_ACTUAL_BALANCE    FIXED DEC(12,2);
+
+   /*****************************************************************/
+   /* CONTROL host variables                                        */
+   /*****************************************************************/
+   DCL 1 HOST_CONTROL_ROW,
+     3 HV_CONTROL_NAME          CHAR(32),
+     3 HV_CONTROL_VALUE_NUM     FIXED BIN(31),
+     3 HV_CONTROL_VALUE_STR     CHAR(40);
+
+   /*****************************************************************/
+   /* CUSTOMER working area                                         */
+   /*****************************************************************/
+   DCL 1 WS_CUSTOMER_RECORD,
+   %INCLUDE CUSTOMER;
+
+   /*****************************************************************/
+   /* CUSTOMER CONTROL area                                         */
+   /*****************************************************************/
+   DCL 1 CUSTOMER_CONTROL,
+   %INCLUDE CUSTCTRL;
+
+   /*****************************************************************/
+   /* ACCOUNT CONTROL area                                          */
+   /*****************************************************************/
+   DCL 1 ACCOUNT_CONTROL,
+   %INCLUDE ACCTCTRL;
+
+   /*****************************************************************/
+   /* Reference data arrays                                         */
+   /*****************************************************************/
+   DCL FORENAME        (100) CHAR(20) INIT((100)' ');
+   DCL FORENAMES_CNT   FIXED BIN(31) INIT(0);
+   DCL FORENAMES_PTR   FIXED BIN(31) INIT(0);
+
+   DCL STREET_NAME_TREE (26)  CHAR(20) INIT((26)' ');
+   DCL STREET_NAME_T_CNT FIXED BIN(31) INIT(0);
+   DCL STREET_NAME_T_PTR FIXED BIN(31) INIT(0);
+
+   DCL STREET_NAME_ROAD (19)  CHAR(20) INIT((19)' ');
+   DCL STREET_NAME_R_CNT FIXED BIN(31) INIT(0);
+   DCL STREET_NAME_R_PTR FIXED BIN(31) INIT(0);
+
+   DCL TOWN            (50)  CHAR(20) INIT((50)' ');
+   DCL TOWN_COUNT      FIXED BIN(31) INIT(0);
+   DCL TOWN_PTR        FIXED BIN(31) INIT(0);
+
+   DCL INITIAL_CHARACTER (30) CHAR(1) INIT((30)' ');
+   DCL INITIALS_CNT    FIXED BIN(31) INIT(0);
+   DCL INITIALS_PTR    FIXED BIN(31) INIT(0);
+
+   DCL TITLE_WORD      (36)  CHAR(9) INIT((36)' ');
+
+   DCL SURNAME         (100) CHAR(20) INIT((100)' ');
+   DCL SURNAMES_CNT    FIXED BIN(31) INIT(0);
+   DCL SURNAMES_PTR    FIXED BIN(31) INIT(0);
+
+   DCL WS_ACCOUNT_TYPE    (5) CHAR(8) INIT((5)' ');
+   DCL ACCOUNT_TYPES_COUNT FIXED BIN(31) INIT(0);
+   DCL ACCOUNT_TYPES_PTR   FIXED BIN(31) INIT(0);
+
+   DCL WS_ACCOUNT_INT_RATE   (5) FIXED DEC(6,2) INIT((5)0);
+   DCL ACCOUNT_INT_RATES_COUNT FIXED BIN(31) INIT(0);
+   DCL ACCOUNT_INT_RATES_PTR   FIXED BIN(31) INIT(0);
+
+   DCL WS_ACCOUNT_OVERDRAFT_LIM (5) FIXED BIN(31) INIT((5)0);
+   DCL ACCOUNT_OVERDRAFT_COUNT  FIXED BIN(31) INIT(0);
+   DCL ACCOUNT_OVERDRAFT_PTR    FIXED BIN(31) INIT(0);
+
+   /*****************************************************************/
+   /* Working variables                                             */
+   /*****************************************************************/
+   DCL START_KEY       FIXED BIN(31) INIT(0);
+   DCL END_KEY         FIXED BIN(31) INIT(0);
+   DCL STEP_KEY        FIXED BIN(31) INIT(0);
+   DCL RANDOM_SEED_NUM FIXED BIN(31) INIT(0);
+   DCL NEXT_KEY        FIXED BIN(31) INIT(0);
+   DCL COMMIT_COUNT    FIXED BIN(31) INIT(0);
+   DCL NO_OF_ACCOUNTS  FIXED BIN(31) INIT(0);
+   DCL WS_ACCOUNT_NUMBER FIXED BIN(31) INIT(1);
+   DCL WS_CNT          FIXED BIN(31) INIT(0);
+   DCL TITLE_NUMBER    FIXED BIN(31) INIT(0);
+   DCL HOUSE_NUMBER    FIXED BIN(31) INIT(0);
+   DCL WS_POSTCODE_NUM FIXED BIN(31) INIT(0);
+
+   DCL WS_TODAY_INT          FIXED BIN(31) INIT(0);
+   DCL WS_REVIEW_DATE_ADD    FIXED BIN(31) INIT(0);
+   DCL WS_NEW_REVIEW_DATE_INT FIXED BIN(31) INIT(0);
+   DCL WS_NEW_REVIEW_YYYYMMDD CHAR(8)       INIT(' ');
+   DCL WS_CURRENT_DATE_9     CHAR(8)        INIT(' ');
+
+   DCL OPENED_DATE_ATTEMPTS  FIXED BIN(31) INIT(0);
+   DCL OPENED_DATE_VALID     CHAR(1)       INIT('N');
+   DCL WS_ACCOUNT_OPENED_DAY   FIXED BIN(31) INIT(0);
+   DCL WS_ACCOUNT_OPENED_MONTH FIXED BIN(31) INIT(0);
+   DCL WS_ACCOUNT_OPENED_YEAR  FIXED BIN(31) INIT(0);
+   DCL WS_OVERDRAFT_CONVERSION FIXED BIN(31) INIT(0);
+
+   DCL WS_SQLCODE_DISPLAY    CHAR(9)  INIT(' ');
+   DCL DISP_REASON_CODE      CHAR(18) INIT(' ');
+
+   /* For CEEGMT / CEEDATM timestamp */
+   /* IBM LE callable services - resolved at link time */
+   DCL CEEGMT  ENTRY EXT;
+   DCL CEEDATM ENTRY EXT;
+   DCL GMT_LILIAN     FIXED BIN(31) INIT(0);
+   DCL GMT_SECONDS    FLOAT DEC(16) INIT(0);
+   DCL PERIOD_NEXT    FLOAT DEC(16) INIT(0);
+   DCL PERIOD_NEXT_F  CHAR(14) INIT(' ');
+   DCL FC             CHAR(12) INIT(' ');
+   DCL DATM_CONV      CHAR(80) INIT(' ');
+   DCL 1 DATM_PICTURE,
+     3 DATM_LENGTH    FIXED BIN(15) INIT(14),
+     3 DATM_FORMAT    CHAR(14) INIT('YYYYMMDDHHMISS');
+   DCL TIMESTAMP_FUNCTION CHAR(40) INIT(' ');
+
+   /* Parm parsing work variables */
+   DCL PARM_DATA  CHAR(256) INIT(' ');
+   DCL PARM_LEN   FIXED BIN(15) INIT(0);
+   DCL PARM_WORK  CHAR(256) INIT(' ');
+   DCL PARM_POS   FIXED BIN(31) INIT(1);
+   DCL PARM_FIELD (4) CHAR(10) INIT((4)' ');
+   DCL I FIXED BIN(31) INIT(0);
+   DCL J FIXED BIN(31) INIT(0);
+
+   DCL LAST_CUSTOMER_NUMBER CHAR(10) INIT(' ');
+   DCL LAST_ACCOUNT_NUMBER  CHAR(8)  INIT(' ');
+   DCL NUMBER_OF_CUSTOMERS  FIXED BIN(31) INIT(0);
+   DCL NUMBER_OF_ACCOUNTS_TOTAL FIXED BIN(31) INIT(0);
+   DCL STOP_CODE            FIXED BIN(31) INIT(0);
+
+   /*****************************************************************/
+   /* MAIN PROCEDURE                                                */
+   /*****************************************************************/
+   TIMESTAMP_FUNCTION = 'Starting BANKDATA';
+   CALL DO_TIMESTAMP;
+
+   CALL INITIALISE_ARRAYS;
+
+   /* Parse parm: START,END,STEP,SEED */
+   CALL PARSE_PARM;
+
+   IF END_KEY < START_KEY THEN DO;
+     PUT SKIP LIST('Final customer number cannot be smaller than' ||
+                   ' first customer number');
+     STOP_CODE = 12;
+     CALL PROGRAM_DONE;
+   END;
+   IF STEP_KEY = 0 THEN DO;
+     PUT SKIP LIST('Gap between customers cannot be zero');
+     STOP_CODE = 12;
+     CALL PROGRAM_DONE;
+   END;
+
+   CALL GET_TODAYS_DATE;
+
+   CALL DELETE_DB2_ROWS;
+
+   /* Seed the random number generator */
+   WS_ACCOUNT_OPENED_DAY = RANDOM(RANDOM_SEED_NUM);
+   FORENAMES_PTR = TRUNC(FORENAMES_CNT * RANDOM()) + 1;
+   INITIALS_PTR  = TRUNC(INITIALS_CNT  * RANDOM()) + 1;
+   SURNAMES_PTR  = TRUNC(SURNAMES_CNT  * RANDOM()) + 1;
+   TOWN_PTR      = TRUNC(TOWN_COUNT    * RANDOM()) + 1;
+   STREET_NAME_R_PTR = TRUNC(STREET_NAME_R_CNT * RANDOM()) + 1;
+   STREET_NAME_T_PTR = TRUNC(STREET_NAME_T_CNT * RANDOM()) + 1;
+   ACCOUNT_TYPES_PTR = TRUNC(ACCOUNT_TYPES_COUNT * RANDOM()) + 1;
+
+   /* Populate CUSTOMER and ACCOUNT tables */
+   TIMESTAMP_FUNCTION = 'Populating Customer + Account tables';
+   CALL DO_TIMESTAMP;
+   COMMIT_COUNT         = 0;
+   LAST_CUSTOMER_NUMBER = ' ';
+   NUMBER_OF_CUSTOMERS  = 0;
+   LAST_ACCOUNT_NUMBER  = ' ';
+   NUMBER_OF_ACCOUNTS_TOTAL = 0;
+
+   NEXT_KEY = START_KEY;
+   DO WHILE (NEXT_KEY <= END_KEY);
+
+     WS_CUSTOMER_RECORD = '';
+
+     CUSTOMER_EYECATCHER = 'CUST';
+     CUSTOMER_NUMBER     = SUBSTR(CHAR(NEXT_KEY + 10000000000), 2, 10);
+     LAST_CUSTOMER_NUMBER = CUSTOMER_NUMBER;
+     NUMBER_OF_CUSTOMERS  = NUMBER_OF_CUSTOMERS + 1;
+
+     TITLE_NUMBER      = TRUNC((35 * RANDOM()) + 1);
+     FORENAMES_PTR     = TRUNC(((FORENAMES_CNT - 1) * RANDOM()) + 1);
+     INITIALS_PTR      = TRUNC(((INITIALS_CNT  - 1) * RANDOM()) + 1);
+     SURNAMES_PTR      = TRUNC(((SURNAMES_CNT  - 1) * RANDOM()) + 1);
+     HOUSE_NUMBER      = TRUNC((99 * RANDOM()) + 1);
+     STREET_NAME_T_PTR = TRUNC(((STREET_NAME_T_CNT - 1)
+                               * RANDOM()) + 1);
+     STREET_NAME_R_PTR = TRUNC(((STREET_NAME_R_CNT - 1)
+                               * RANDOM()) + 1);
+     TOWN_PTR          = TRUNC(((TOWN_COUNT - 1) * RANDOM()) + 1);
+
+     CUSTOMER_NAME     = ' ';
+     CUSTOMER_PHONE    = ' ';
+     CUSTOMER_ADDRESS  = ' ';
+     CUSTOMER_STATUS   = ' ';
+
+     CUSTOMER_TITLE    = TITLE_WORD(TITLE_NUMBER);
+     CUSTOMER_FIRST_NAME = TRIM(FORENAME(FORENAMES_PTR)) || ' ' ||
+                           TRIM(CHAR(INITIAL_CHARACTER(INITIALS_PTR)));
+     CUSTOMER_LAST_NAME  = SURNAME(SURNAMES_PTR);
+
+     CUSTOMER_ADDR_LINE1 =
+       TRIM(CHAR(HOUSE_NUMBER)) || ' ' ||
+       TRIM(STREET_NAME_TREE(STREET_NAME_T_PTR)) || ' ' ||
+       TRIM(STREET_NAME_ROAD(STREET_NAME_R_PTR));
+     CUSTOMER_CITY     = TOWN(TOWN_PTR);
+
+     WS_POSTCODE_NUM = TRUNC(((99 - 10) * RANDOM()) + 10);
+     CUSTOMER_POSTCODE = 'SW' || CHAR(WS_POSTCODE_NUM) || ' 3CD';
+
+     CUSTOMER_COUNTRY  = 'United Kingdom';
+     CUSTOMER_STATUS   = 'ACTIVE';
+
+     CUSTOMER_DOB_DAY   = SUBSTR(CHAR(TRUNC((28 - 1) * RANDOM())
+                                      + 1 + 100), 2, 2);
+     CUSTOMER_DOB_MONTH = SUBSTR(CHAR(TRUNC((12 - 1) * RANDOM())
+                                      + 1 + 100), 2, 2);
+     CUSTOMER_DOB_YEAR  = CHAR(TRUNC((2000 - 1900) * RANDOM()) + 1900);
+
+     CUSTOMER_SORTCODE  = SORTCODE;
+
+     CUSTOMER_CREDIT_SCORE =
+       SUBSTR(CHAR(TRUNC((999 - 1) * RANDOM()) + 1 + 1000), 2, 3);
+
+     /* CS review date: today + 1-21 days */
+     WS_REVIEW_DATE_ADD = TRUNC((21 - 1) * RANDOM()) + 1;
+     WS_NEW_REVIEW_DATE_INT = WS_TODAY_INT + WS_REVIEW_DATE_ADD;
+     WS_NEW_REVIEW_YYYYMMDD =
+       DAYSTODATE(WS_NEW_REVIEW_DATE_INT, 'YYYYMMDD');
+     CUSTOMER_CS_REVIEW_DAY   = SUBSTR(WS_NEW_REVIEW_YYYYMMDD, 7, 2);
+     CUSTOMER_CS_REVIEW_MONTH = SUBSTR(WS_NEW_REVIEW_YYYYMMDD, 5, 2);
+     CUSTOMER_CS_REVIEW_YEAR  = SUBSTR(WS_NEW_REVIEW_YYYYMMDD, 1, 4);
+
+     /* Created date = today */
+     CUSTOMER_CREATED_YEAR  = SUBSTR(WS_CURRENT_DATE_9, 1, 4);
+     CUSTOMER_CREATED_MONTH = SUBSTR(WS_CURRENT_DATE_9, 5, 2);
+     CUSTOMER_CREATED_DAY   = SUBSTR(WS_CURRENT_DATE_9, 7, 2);
+
+     /* Populate CUSTOMER host variables */
+     HV_CUSTOMER_EYECATCHER  = 'CUST';
+     HV_CUSTOMER_SORTCODE    = CUSTOMER_SORTCODE;
+     HV_CUSTOMER_NUMBER      = CUSTOMER_NUMBER;
+     HV_CUSTOMER_TITLE       = CUSTOMER_TITLE;
+     HV_CUSTOMER_FIRST_NAME  = CUSTOMER_FIRST_NAME;
+     HV_CUSTOMER_LAST_NAME   = CUSTOMER_LAST_NAME;
+     HV_CUSTOMER_PHONE       = CUSTOMER_PHONE;
+     HV_CUSTOMER_ADDR_LINE1  = CUSTOMER_ADDR_LINE1;
+     HV_CUSTOMER_ADDR_LINE2  = CUSTOMER_ADDR_LINE2;
+     HV_CUSTOMER_CITY        = CUSTOMER_CITY;
+     HV_CUSTOMER_POSTCODE    = CUSTOMER_POSTCODE;
+     HV_CUSTOMER_COUNTRY     = CUSTOMER_COUNTRY;
+     HV_CUSTOMER_STATUS      = CUSTOMER_STATUS;
+
+     /* DOB as INTEGER (YYYYMMDD) */
+     HV_CUSTOMER_DOB =
+       (CUSTOMER_DOB_YEAR * 10000) +
+       (CUSTOMER_DOB_MONTH * 100) +
+       CUSTOMER_DOB_DAY;
+
+     /* Created date as INTEGER */
+     HV_CUSTOMER_CREATE_DATE =
+       (CUSTOMER_CREATED_YEAR * 10000) +
+       (CUSTOMER_CREATED_MONTH * 100) +
+       CUSTOMER_CREATED_DAY;
+
+     HV_CUSTOMER_CREDIT_SCORE    = CUSTOMER_CREDIT_SCORE;
+
+     /* CS review date as INTEGER */
+     HV_CUSTOMER_CS_REVIEW_DATE =
+       (CUSTOMER_CS_REVIEW_YEAR * 10000) +
+       (CUSTOMER_CS_REVIEW_MONTH * 100) +
+       CUSTOMER_CS_REVIEW_DAY;
+
+     EXEC SQL
+       INSERT INTO CUSTOMER
+              (CUSTOMER_EYECATCHER, CUSTOMER_SORTCODE,
+               CUSTOMER_NUMBER, CUSTOMER_TITLE,
+               CUSTOMER_FIRST_NAME, CUSTOMER_LAST_NAME,
+               CUSTOMER_DATE_OF_BIRTH, CUSTOMER_PHONE,
+               CUSTOMER_ADDR_LINE1, CUSTOMER_ADDR_LINE2,
+               CUSTOMER_CITY, CUSTOMER_POSTCODE,
+               CUSTOMER_COUNTRY, CUSTOMER_STATUS,
+               CUSTOMER_CREATED_DATE, CUSTOMER_CREDIT_SCORE,
+               CUSTOMER_CS_REVIEW_DATE)
+       VALUES (:HV_CUSTOMER_EYECATCHER, :HV_CUSTOMER_SORTCODE,
+               :HV_CUSTOMER_NUMBER, :HV_CUSTOMER_TITLE,
+               :HV_CUSTOMER_FIRST_NAME, :HV_CUSTOMER_LAST_NAME,
+               :HV_CUSTOMER_DOB, :HV_CUSTOMER_PHONE,
+               :HV_CUSTOMER_ADDR_LINE1, :HV_CUSTOMER_ADDR_LINE2,
+               :HV_CUSTOMER_CITY, :HV_CUSTOMER_POSTCODE,
+               :HV_CUSTOMER_COUNTRY, :HV_CUSTOMER_STATUS,
+               :HV_CUSTOMER_CREATE_DATE, :HV_CUSTOMER_CREDIT_SCORE,
+               :HV_CUSTOMER_CS_REVIEW_DATE);
+
+     IF SQLCODE ^= 0 THEN DO;
+       WS_SQLCODE_DISPLAY = CHAR(SQLCODE);
+       PUT SKIP LIST('Error inserting CUSTOMER row.' ||
+                     ' CUSTOMER=' || HV_CUSTOMER_NUMBER ||
+                     ' SORTCODE=' || HV_CUSTOMER_SORTCODE ||
+                     ' SQLCODE=' || WS_SQLCODE_DISPLAY ||
+                     ' SQLSTATE=' || SQLSTATE);
+       STOP_CODE = 12;
+       CALL PROGRAM_DONE;
+     END;
+
+     CALL DEFINE_ACC;
+
+     COMMIT_COUNT = COMMIT_COUNT + 1;
+     IF COMMIT_COUNT > 1000 THEN DO;
+       EXEC SQL COMMIT WORK;
+       COMMIT_COUNT = 0;
+     END;
+
+     NEXT_KEY = NEXT_KEY + STEP_KEY;
+   END;  /* DO WHILE next_key */
+
+   /* Update CONTROL table for customer count */
+   HV_CONTROL_NAME = ' ';
+   HV_CONTROL_NAME = 'BANKZCUST' || SORTCODE || '  ';
+   HV_CONTROL_VALUE_NUM = LAST_CUSTOMER_NUMBER;
+
+   EXEC SQL
+     UPDATE CONTROL
+        SET CONTROL_VALUE_NUM = :HV_CONTROL_VALUE_NUM
+      WHERE CONTROL_NAME = :HV_CONTROL_NAME;
+
+   IF SQLCODE = 100 THEN DO;
+     HV_CONTROL_VALUE_STR = ' ';
+     EXEC SQL
+       INSERT INTO CONTROL
+              (CONTROL_NAME, CONTROL_VALUE_NUM, CONTROL_VALUE_STR)
+       VALUES (:HV_CONTROL_NAME, :HV_CONTROL_VALUE_NUM,
+               :HV_CONTROL_VALUE_STR);
+   END;
+
+   /* Update ACCOUNT-LAST control */
+   HV_CONTROL_NAME = ' ';
+   HV_CONTROL_NAME = SORTCODE || '-' || 'ACCOUNT-LAST';
+   HV_CONTROL_VALUE_NUM = LAST_ACCOUNT_NUMBER;
+   HV_CONTROL_VALUE_STR = ' ';
+
+   EXEC SQL
+     UPDATE CONTROL
+        SET CONTROL_VALUE_NUM = :HV_CONTROL_VALUE_NUM
+      WHERE CONTROL_NAME = :HV_CONTROL_NAME;
+
+   /* Update ACCOUNT-COUNT control */
+   HV_CONTROL_NAME = ' ';
+   HV_CONTROL_NAME = SORTCODE || '-' || 'ACCOUNT-COUNT';
+   HV_CONTROL_VALUE_NUM = NUMBER_OF_ACCOUNTS_TOTAL;
+   HV_CONTROL_VALUE_STR = ' ';
+
+   EXEC SQL
+     UPDATE CONTROL
+        SET CONTROL_VALUE_NUM = :HV_CONTROL_VALUE_NUM
+      WHERE CONTROL_NAME = :HV_CONTROL_NAME;
+
+   /* Final commit */
+   EXEC SQL COMMIT WORK;
+
+   TIMESTAMP_FUNCTION = 'Finishing BANKDATA';
+   CALL DO_TIMESTAMP;
+
+   CALL PROGRAM_DONE;
+
+   /*****************************************************************/
+   /* PROGRAM_DONE - Finish program with return code                */
+   /*****************************************************************/
+   PROGRAM_DONE: PROC;
+     CALL PLIRETC(STOP_CODE);
+     STOP;
+   END PROGRAM_DONE;
+
+   /*****************************************************************/
+   /* DEFINE_ACC - Decide number of accounts and populate them      */
+   /*****************************************************************/
+   DEFINE_ACC: PROC;
+     NO_OF_ACCOUNTS = TRUNC((5 - 1) * RANDOM()) + 1;
+     DO WS_CNT = 1 TO NO_OF_ACCOUNTS;
+       CALL POPULATE_ACC;
+     END;
+     EXEC SQL COMMIT WORK;
+   END DEFINE_ACC;
+
+   /*****************************************************************/
+   /* POPULATE_ACC - Generate and insert one account record        */
+   /*****************************************************************/
+   POPULATE_ACC: PROC;
+
+     HV_ACCOUNT_OPENED_DAY   = '00';
+     HV_ACCOUNT_OPENED_MONTH = '00';
+     HV_ACCOUNT_OPENED_YEAR  = '0000';
+     OPENED_DATE_ATTEMPTS    = 0;
+     OPENED_DATE_VALID       = 'N';
+     DO WHILE (OPENED_DATE_VALID = 'N');
+       CALL GENERATE_OPENED_DATE;
+     END;
+
+     HV_ACCOUNT_EYECATCHER = 'ACCT';
+     HV_ACCOUNT_CUST_NO    = CUSTOMER_NUMBER;
+     HV_ACCOUNT_SORT_CODE  = SORTCODE;
+     HV_ACCOUNT_NUMBER     =
+       SUBSTR(CHAR(WS_ACCOUNT_NUMBER + 100000000), 2, 8);
+     LAST_ACCOUNT_NUMBER   = HV_ACCOUNT_NUMBER;
+
+     HV_ACCOUNT_TYPE            = WS_ACCOUNT_TYPE(WS_CNT);
+     HV_ACCOUNT_INTEREST_RATE   = WS_ACCOUNT_INT_RATE(WS_CNT);
+     HV_ACCOUNT_OPENED_DELIM1   = '.';
+     HV_ACCOUNT_OPENED_DELIM2   = '.';
+     WS_OVERDRAFT_CONVERSION    = WS_ACCOUNT_OVERDRAFT_LIM(WS_CNT);
+     HV_ACCOUNT_OVERDRAFT_LIMIT = WS_OVERDRAFT_CONVERSION;
+
+     HV_ACCOUNT_LAST_STMT_YEAR    = '2021';
+     HV_ACCOUNT_LAST_STMT_DELIM1  = '.';
+     HV_ACCOUNT_LAST_STMT_MONTH   = '07';
+     HV_ACCOUNT_LAST_STMT_DELIM2  = '.';
+     HV_ACCOUNT_LAST_STMT_DAY     = '01';
+     HV_ACCOUNT_NEXT_STMT_YEAR    = '2021';
+     HV_ACCOUNT_NEXT_STMT_DELIM1  = '.';
+     HV_ACCOUNT_NEXT_STMT_MONTH   = '08';
+     HV_ACCOUNT_NEXT_STMT_DELIM2  = '.';
+     HV_ACCOUNT_NEXT_STMT_DAY     = '01';
+
+     HV_ACCOUNT_AVAILABLE_BALANCE =
+       TRUNC((999999 - 1) * RANDOM()) + 1;
+     HV_ACCOUNT_ACTUAL_BALANCE = HV_ACCOUNT_AVAILABLE_BALANCE;
+
+     IF HV_ACCOUNT_TYPE = 'LOAN    ' |
+        HV_ACCOUNT_TYPE = 'MORTGAGE' THEN DO;
+       HV_ACCOUNT_ACTUAL_BALANCE    = -HV_ACCOUNT_ACTUAL_BALANCE;
+       HV_ACCOUNT_AVAILABLE_BALANCE = -HV_ACCOUNT_AVAILABLE_BALANCE;
+     END;
+
+     EXEC SQL
+       INSERT INTO ACCOUNT
+              (ACCOUNT_EYECATCHER, ACCOUNT_CUSTOMER_NUMBER,
+               ACCOUNT_SORTCODE, ACCOUNT_NUMBER,
+               ACCOUNT_TYPE, ACCOUNT_INTEREST_RATE,
+               ACCOUNT_OPENED, ACCOUNT_OVERDRAFT_LIMIT,
+               ACCOUNT_LAST_STATEMENT, ACCOUNT_NEXT_STATEMENT,
+               ACCOUNT_AVAILABLE_BALANCE, ACCOUNT_ACTUAL_BALANCE)
+       VALUES (:HV_ACCOUNT_EYECATCHER, :HV_ACCOUNT_CUST_NO,
+               :HV_ACCOUNT_SORT_CODE, :HV_ACCOUNT_NUMBER,
+               :HV_ACCOUNT_TYPE, :HV_ACCOUNT_INTEREST_RATE,
+               :HV_ACCOUNT_OPENED, :HV_ACCOUNT_OVERDRAFT_LIMIT,
+               :HV_ACCOUNT_LAST_STMT_DATE, :HV_ACCOUNT_NEXT_STMT_DATE,
+               :HV_ACCOUNT_AVAILABLE_BALANCE,
+               :HV_ACCOUNT_ACTUAL_BALANCE);
+
+     IF SQLCODE ^= 0 THEN DO;
+       WS_SQLCODE_DISPLAY = CHAR(SQLCODE);
+       CALL SET_REASON_CODE;
+       PUT SKIP LIST('Error inserting rows on ACCOUNT table.' ||
+                     ' ACC no=' || HV_ACCOUNT_NUMBER ||
+                     ' SORTCODE=' || HV_ACCOUNT_SORT_CODE ||
+                     ' SQLCODE=' || WS_SQLCODE_DISPLAY ||
+                     ' REASON=' || DISP_REASON_CODE ||
+                     ' SQLSTATE=' || SQLSTATE);
+       STOP_CODE = 12;
+       CALL PROGRAM_DONE;
+     END;
+
+     LAST_ACCOUNT_NUMBER      = HV_ACCOUNT_NUMBER;
+     NUMBER_OF_ACCOUNTS_TOTAL = NUMBER_OF_ACCOUNTS_TOTAL + 1;
+     WS_ACCOUNT_NUMBER        = WS_ACCOUNT_NUMBER + 1;
+
+   END POPULATE_ACC;
+
+   /*****************************************************************/
+   /* GENERATE_OPENED_DATE - Generate account open date            */
+   /*****************************************************************/
+   GENERATE_OPENED_DATE: PROC;
+
+     WS_ACCOUNT_OPENED_DAY   =
+       TRUNC((28 - 1) * RANDOM()) + 1;
+     WS_ACCOUNT_OPENED_MONTH =
+       TRUNC((12 - 1) * RANDOM()) + 1;
+     WS_ACCOUNT_OPENED_YEAR  =
+       TRUNC(((2014 - CUSTOMER_DOB_YEAR) * RANDOM()) +
+             CUSTOMER_DOB_YEAR);
+     HV_ACCOUNT_OPENED_DAY   =
+       SUBSTR(CHAR(WS_ACCOUNT_OPENED_DAY + 100), 2, 2);
+     HV_ACCOUNT_OPENED_MONTH =
+       SUBSTR(CHAR(WS_ACCOUNT_OPENED_MONTH + 100), 2, 2);
+     HV_ACCOUNT_OPENED_YEAR  =
+       CHAR(WS_ACCOUNT_OPENED_YEAR);
+
+     OPENED_DATE_ATTEMPTS = OPENED_DATE_ATTEMPTS + 1;
+
+     IF WS_ACCOUNT_OPENED_YEAR > CUSTOMER_DOB_YEAR THEN DO;
+       OPENED_DATE_VALID = 'Y';
+       RETURN;
+     END;
+     IF OPENED_DATE_ATTEMPTS > 100 THEN DO;
+       OPENED_DATE_VALID   = 'Y';
+       HV_ACCOUNT_OPENED_DAY   = CUSTOMER_DOB_DAY;
+       HV_ACCOUNT_OPENED_MONTH = CUSTOMER_DOB_MONTH;
+       HV_ACCOUNT_OPENED_YEAR  = CUSTOMER_DOB_YEAR;
+     END;
+
+   END GENERATE_OPENED_DATE;
+
+   /*****************************************************************/
+   /* INITIALISE_ARRAYS - Load reference data tables               */
+   /*****************************************************************/
+   INITIALISE_ARRAYS: PROC;
+
+     TITLE_WORD( 1) = 'Mr       ';
+     TITLE_WORD( 2) = 'Mrs      ';
+     TITLE_WORD( 3) = 'Miss     ';
+     TITLE_WORD( 4) = 'Ms       ';
+     TITLE_WORD( 5) = 'Mr       ';
+     TITLE_WORD( 6) = 'Mrs      ';
+     TITLE_WORD( 7) = 'Miss     ';
+     TITLE_WORD( 8) = 'Ms       ';
+     TITLE_WORD( 9) = 'Mr       ';
+     TITLE_WORD(10) = 'Mrs      ';
+     TITLE_WORD(11) = 'Miss     ';
+     TITLE_WORD(12) = 'Ms       ';
+     TITLE_WORD(13) = 'Mr       ';
+     TITLE_WORD(14) = 'Mrs      ';
+     TITLE_WORD(15) = 'Miss     ';
+     TITLE_WORD(16) = 'Ms       ';
+     TITLE_WORD(17) = 'Mr       ';
+     TITLE_WORD(18) = 'Mrs      ';
+     TITLE_WORD(19) = 'Miss     ';
+     TITLE_WORD(20) = 'Ms       ';
+     TITLE_WORD(21) = 'Dr       ';
+     TITLE_WORD(22) = 'Drs      ';
+     TITLE_WORD(23) = 'Dr       ';
+     TITLE_WORD(24) = 'Ms       ';
+     TITLE_WORD(25) = 'Dr       ';
+     TITLE_WORD(26) = 'Ms       ';
+     TITLE_WORD(27) = 'Dr       ';
+     TITLE_WORD(28) = 'Ms       ';
+     TITLE_WORD(29) = 'Professor';
+     TITLE_WORD(30) = 'Professor';
+     TITLE_WORD(31) = 'Professor';
+     TITLE_WORD(32) = 'Lord     ';
+     TITLE_WORD(33) = 'Sir      ';
+     TITLE_WORD(34) = 'Sir      ';
+     TITLE_WORD(35) = 'Lady     ';
+     TITLE_WORD(36) = 'Lady     ';
+
+     FORENAMES_CNT = 50;
+     FORENAME( 1) = 'Michael   '; FORENAME( 2) = 'Will      ';
+     FORENAME( 3) = 'Geoff     '; FORENAME( 4) = 'Chris     ';
+     FORENAME( 5) = 'Dave      '; FORENAME( 6) = 'Luke      ';
+     FORENAME( 7) = 'Adam      '; FORENAME( 8) = 'Giuseppe  ';
+     FORENAME( 9) = 'James     '; FORENAME(10) = 'Jon       ';
+     FORENAME(11) = 'Andy      '; FORENAME(12) = 'Lou       ';
+     FORENAME(13) = 'Robert    '; FORENAME(14) = 'Sam       ';
+     FORENAME(15) = 'Frederick '; FORENAME(16) = 'Buford    ';
+     FORENAME(17) = 'William   '; FORENAME(18) = 'Howard    ';
+     FORENAME(19) = 'Anthony   '; FORENAME(20) = 'Bruce     ';
+     FORENAME(21) = 'Peter     '; FORENAME(22) = 'Stephen   ';
+     FORENAME(23) = 'Donald    '; FORENAME(24) = 'Dennis    ';
+     FORENAME(25) = 'Harold    '; FORENAME(26) = 'Amy       ';
+     FORENAME(27) = 'Belinda   '; FORENAME(28) = 'Charlotte ';
+     FORENAME(29) = 'Donna     '; FORENAME(30) = 'Felicia   ';
+     FORENAME(31) = 'Gretchen  '; FORENAME(32) = 'Henrietta ';
+     FORENAME(33) = 'Imogen    '; FORENAME(34) = 'Josephine ';
+     FORENAME(35) = 'Kimberley '; FORENAME(36) = 'Lucy      ';
+     FORENAME(37) = 'Monica    '; FORENAME(38) = 'Natalie   ';
+     FORENAME(39) = 'Ophelia   '; FORENAME(40) = 'Patricia  ';
+     FORENAME(41) = 'Querida   '; FORENAME(42) = 'Rachel    ';
+     FORENAME(43) = 'Samantha  '; FORENAME(44) = 'Tanya     ';
+     FORENAME(45) = 'Ulrika    '; FORENAME(46) = 'Virginia  ';
+     FORENAME(47) = 'Wendy     '; FORENAME(48) = 'Xaviera   ';
+     FORENAME(49) = 'Yvonne    '; FORENAME(50) = 'Zsa Zsa   ';
+
+     INITIALS_CNT = 30;
+     INITIAL_CHARACTER( 1) = 'A'; INITIAL_CHARACTER( 2) = 'B';
+     INITIAL_CHARACTER( 3) = 'C'; INITIAL_CHARACTER( 4) = 'D';
+     INITIAL_CHARACTER( 5) = 'E'; INITIAL_CHARACTER( 6) = 'F';
+     INITIAL_CHARACTER( 7) = 'G'; INITIAL_CHARACTER( 8) = 'H';
+     INITIAL_CHARACTER( 9) = 'I'; INITIAL_CHARACTER(10) = 'J';
+     INITIAL_CHARACTER(11) = 'L'; INITIAL_CHARACTER(12) = 'K';
+     INITIAL_CHARACTER(13) = 'M'; INITIAL_CHARACTER(14) = 'N';
+     INITIAL_CHARACTER(15) = 'O'; INITIAL_CHARACTER(16) = 'P';
+     INITIAL_CHARACTER(17) = 'Q'; INITIAL_CHARACTER(18) = 'R';
+     INITIAL_CHARACTER(19) = 'S'; INITIAL_CHARACTER(20) = 'T';
+     INITIAL_CHARACTER(21) = 'U'; INITIAL_CHARACTER(22) = 'V';
+     INITIAL_CHARACTER(23) = 'W'; INITIAL_CHARACTER(24) = 'X';
+     INITIAL_CHARACTER(25) = 'Y'; INITIAL_CHARACTER(26) = 'Z';
+     INITIAL_CHARACTER(27) = ' '; INITIAL_CHARACTER(28) = ' ';
+     INITIAL_CHARACTER(29) = ' '; INITIAL_CHARACTER(30) = ' ';
+
+     SURNAMES_CNT = 50;
+     SURNAME( 1) = 'Jones     '; SURNAME( 2) = 'Davidson  ';
+     SURNAME( 3) = 'Baker     '; SURNAME( 4) = 'Smith     ';
+     SURNAME( 5) = 'Taylor    '; SURNAME( 6) = 'Evans     ';
+     SURNAME( 7) = 'Roberts   '; SURNAME( 8) = 'Wright    ';
+     SURNAME( 9) = 'Walker    '; SURNAME(10) = 'Green     ';
+     SURNAME(11) = 'Price     '; SURNAME(12) = 'Downton   ';
+     SURNAME(13) = 'Gatting   '; SURNAME(14) = 'Robinson  ';
+     SURNAME(15) = 'Justice   '; SURNAME(16) = 'Tell      ';
+     SURNAME(17) = 'Stark     '; SURNAME(18) = 'Strange   ';
+     SURNAME(19) = 'Parker    '; SURNAME(20) = 'Blake     ';
+     SURNAME(21) = 'Jackson   '; SURNAME(22) = 'Groves    ';
+     SURNAME(23) = 'Palmer    '; SURNAME(24) = 'Lloyd     ';
+     SURNAME(25) = 'Hughes    '; SURNAME(26) = 'Briggs    ';
+     SURNAME(27) = 'Higins    '; SURNAME(28) = 'Goodwin   ';
+     SURNAME(29) = 'Valmont   '; SURNAME(30) = 'Brown     ';
+     SURNAME(31) = 'Hopkins   '; SURNAME(32) = 'Bonney    ';
+     SURNAME(33) = 'Jenkins   '; SURNAME(34) = 'Lloyd     ';
+     SURNAME(35) = 'Wilmore   '; SURNAME(36) = 'Franklin  ';
+     SURNAME(37) = 'Renton    '; SURNAME(38) = 'Seward    ';
+     SURNAME(39) = 'Morris    '; SURNAME(40) = 'Johnson   ';
+     SURNAME(41) = 'Brennan   '; SURNAME(42) = 'Thomson   ';
+     SURNAME(43) = 'Barker    '; SURNAME(44) = 'Corbett   ';
+     SURNAME(45) = 'Weber     '; SURNAME(46) = 'Leigh     ';
+     SURNAME(47) = 'Croft     '; SURNAME(48) = 'Walken    ';
+     SURNAME(49) = 'Dubois    '; SURNAME(50) = 'Stephens  ';
+
+     STREET_NAME_T_CNT = 26;
+     STREET_NAME_TREE( 1) = 'Acacia   ';
+     STREET_NAME_TREE( 2) = 'Birch    ';
+     STREET_NAME_TREE( 3) = 'Cypress  ';
+     STREET_NAME_TREE( 4) = 'Douglas  ';
+     STREET_NAME_TREE( 5) = 'Elm      ';
+     STREET_NAME_TREE( 6) = 'Fir      ';
+     STREET_NAME_TREE( 7) = 'Gorse    ';
+     STREET_NAME_TREE( 8) = 'Holly    ';
+     STREET_NAME_TREE( 9) = 'Ironwood ';
+     STREET_NAME_TREE(10) = 'Joshua   ';
+     STREET_NAME_TREE(11) = 'Kapok    ';
+     STREET_NAME_TREE(12) = 'Laburnam ';
+     STREET_NAME_TREE(13) = 'Maple    ';
+     STREET_NAME_TREE(14) = 'Nutmeg   ';
+     STREET_NAME_TREE(15) = 'Oak      ';
+     STREET_NAME_TREE(16) = 'Pine     ';
+     STREET_NAME_TREE(17) = 'Quercine ';
+     STREET_NAME_TREE(18) = 'Rowan    ';
+     STREET_NAME_TREE(19) = 'Sycamore ';
+     STREET_NAME_TREE(20) = 'Thorn    ';
+     STREET_NAME_TREE(21) = 'Ulmus    ';
+     STREET_NAME_TREE(22) = 'Viburnum ';
+     STREET_NAME_TREE(23) = 'Willow   ';
+     STREET_NAME_TREE(24) = 'Xylophone';
+     STREET_NAME_TREE(25) = 'Yew      ';
+     STREET_NAME_TREE(26) = 'Zebratree';
+
+     STREET_NAME_R_CNT = 19;
+     STREET_NAME_ROAD( 1) = 'Avenue   ';
+     STREET_NAME_ROAD( 2) = 'Boulevard';
+     STREET_NAME_ROAD( 3) = 'Close    ';
+     STREET_NAME_ROAD( 4) = 'Crescent ';
+     STREET_NAME_ROAD( 5) = 'Drive    ';
+     STREET_NAME_ROAD( 6) = 'Escalade ';
+     STREET_NAME_ROAD( 7) = 'Frontage ';
+     STREET_NAME_ROAD( 8) = 'Lane     ';
+     STREET_NAME_ROAD( 9) = 'Mews     ';
+     STREET_NAME_ROAD(10) = 'Rise     ';
+     STREET_NAME_ROAD(11) = 'Court    ';
+     STREET_NAME_ROAD(12) = 'Opening  ';
+     STREET_NAME_ROAD(13) = 'Loke     ';
+     STREET_NAME_ROAD(14) = 'Square   ';
+     STREET_NAME_ROAD(15) = 'Houses   ';
+     STREET_NAME_ROAD(16) = 'Gate     ';
+     STREET_NAME_ROAD(17) = 'Street   ';
+     STREET_NAME_ROAD(18) = 'Grove    ';
+     STREET_NAME_ROAD(19) = 'March    ';
+
+     TOWN_COUNT = 50;
+     TOWN( 1) = 'Norwich     '; TOWN( 2) = 'Acle       ';
+     TOWN( 3) = 'Aylsham     '; TOWN( 4) = 'Wymondham  ';
+     TOWN( 5) = 'Attleborough'; TOWN( 6) = 'Cromer     ';
+     TOWN( 7) = 'Cambridge   '; TOWN( 8) = 'Peterborough';
+     TOWN( 9) = 'Weobley     '; TOWN(10) = 'Wembley    ';
+     TOWN(11) = 'Hereford    '; TOWN(12) = 'Ross-on-Wye';
+     TOWN(13) = 'Hay-on-Wye  '; TOWN(14) = 'Nottingham ';
+     TOWN(15) = 'Northampton '; TOWN(16) = 'Nuneaton   ';
+     TOWN(17) = 'Oxford      '; TOWN(18) = 'Oswestry   ';
+     TOWN(19) = 'Ormskirk    '; TOWN(20) = 'Royston    ';
+     TOWN(21) = 'Chilcomb    '; TOWN(22) = 'Winchester ';
+     TOWN(23) = 'Wrexham     '; TOWN(24) = 'Crewe      ';
+     TOWN(25) = 'Plymouth    '; TOWN(26) = 'Portsmouth ';
+     TOWN(27) = 'Forfar      '; TOWN(28) = 'Fife       ';
+     TOWN(29) = 'Aberdeen    '; TOWN(30) = 'Glasgow    ';
+     TOWN(31) = 'Birmingham  '; TOWN(32) = 'Bolton     ';
+     TOWN(33) = 'Whitby      '; TOWN(34) = 'Manchester ';
+     TOWN(35) = 'Chester     '; TOWN(36) = 'Leicester  ';
+     TOWN(37) = 'Lowestoft   '; TOWN(38) = 'Ipswich    ';
+     TOWN(39) = 'Colchester  '; TOWN(40) = 'Dover      ';
+     TOWN(41) = 'Brighton    '; TOWN(42) = 'Salisbury  ';
+     TOWN(43) = 'Bristol     '; TOWN(44) = 'Bath       ';
+     TOWN(45) = 'Gloucester  '; TOWN(46) = 'Cheltenham ';
+     TOWN(47) = 'Durham      '; TOWN(48) = 'Carlisle   ';
+     TOWN(49) = 'York        '; TOWN(50) = 'Exeter     ';
+
+     ACCOUNT_TYPES_COUNT = 5;
+     WS_ACCOUNT_TYPE(1) = 'ISA     ';
+     WS_ACCOUNT_TYPE(2) = 'SAVING  ';
+     WS_ACCOUNT_TYPE(3) = 'CURRENT ';
+     WS_ACCOUNT_TYPE(4) = 'LOAN    ';
+     WS_ACCOUNT_TYPE(5) = 'MORTGAGE';
+
+     ACCOUNT_INT_RATES_COUNT = 5;
+     WS_ACCOUNT_INT_RATE(1) = 2.10;
+     WS_ACCOUNT_INT_RATE(2) = 1.75;
+     WS_ACCOUNT_INT_RATE(3) = 0;
+     WS_ACCOUNT_INT_RATE(4) = 17.90;
+     WS_ACCOUNT_INT_RATE(5) = 5.25;
+
+     ACCOUNT_OVERDRAFT_COUNT = 5;
+     WS_ACCOUNT_OVERDRAFT_LIM(1) = 0;
+     WS_ACCOUNT_OVERDRAFT_LIM(2) = 0;
+     WS_ACCOUNT_OVERDRAFT_LIM(3) = 100;
+     WS_ACCOUNT_OVERDRAFT_LIM(4) = 0;
+     WS_ACCOUNT_OVERDRAFT_LIM(5) = 0;
+
+   END INITIALISE_ARRAYS;
+
+   /*****************************************************************/
+   /* DELETE_DB2_ROWS - Clear CUSTOMER, ACCOUNT, CONTROL tables    */
+   /*****************************************************************/
+   DELETE_DB2_ROWS: PROC;
+
+     TIMESTAMP_FUNCTION = 'Deleting from CUSTOMER table';
+     CALL DO_TIMESTAMP;
+     EXEC SQL DELETE FROM CUSTOMER;
+     TIMESTAMP_FUNCTION = 'Deleting from CUSTOMER table COMPLETE';
+     CALL DO_TIMESTAMP;
+     IF SQLCODE ^= 100 & SQLCODE ^= 0 THEN DO;
+       CALL SET_REASON_CODE;
+       WS_SQLCODE_DISPLAY = CHAR(SQLCODE);
+       PUT SKIP LIST('Error deleting rows from CUSTOMER table.' ||
+                     ' SQLCODE=' || WS_SQLCODE_DISPLAY ||
+                     ' REASON=' || DISP_REASON_CODE);
+       STOP_CODE = 12;
+       CALL PROGRAM_DONE;
+     END;
+
+     TIMESTAMP_FUNCTION = 'Deleting from ACCOUNT table';
+     CALL DO_TIMESTAMP;
+     EXEC SQL DELETE FROM ACCOUNT;
+     TIMESTAMP_FUNCTION = 'Deleting from ACCOUNT table COMPLETE';
+     CALL DO_TIMESTAMP;
+     IF SQLCODE ^= 100 & SQLCODE ^= 0 THEN DO;
+       CALL SET_REASON_CODE;
+       WS_SQLCODE_DISPLAY = CHAR(SQLCODE);
+       PUT SKIP LIST('Error deleting rows from ACCOUNT table.' ||
+                     ' SQLCODE=' || WS_SQLCODE_DISPLAY ||
+                     ' REASON=' || DISP_REASON_CODE);
+       STOP_CODE = 12;
+       CALL PROGRAM_DONE;
+     END;
+
+     TIMESTAMP_FUNCTION = 'Deleting from CONTROL table';
+     CALL DO_TIMESTAMP;
+     EXEC SQL DELETE FROM CONTROL;
+     TIMESTAMP_FUNCTION = 'Deleting from CONTROL table COMPLETE';
+     CALL DO_TIMESTAMP;
+     IF SQLCODE ^= 100 & SQLCODE ^= 0 THEN DO;
+       CALL SET_REASON_CODE;
+       WS_SQLCODE_DISPLAY = CHAR(SQLCODE);
+       PUT SKIP LIST('Error deleting rows from CONTROL table.' ||
+                     ' SQLCODE=' || WS_SQLCODE_DISPLAY ||
+                     ' REASON=' || DISP_REASON_CODE);
+       STOP_CODE = 12;
+       CALL PROGRAM_DONE;
+     END;
+
+     CALL INSERT_INITIAL_CONTROL_RECORDS;
+     EXEC SQL COMMIT WORK;
+
+   END DELETE_DB2_ROWS;
+
+   /*****************************************************************/
+   /* INSERT_INITIAL_CONTROL_RECORDS - Seed CONTROL table          */
+   /*****************************************************************/
+   INSERT_INITIAL_CONTROL_RECORDS: PROC;
+
+     /* Default sortcode record */
+     HV_CONTROL_NAME = ' ';
+     HV_CONTROL_NAME = 'BANKZCUST' || SORTCODE || '  ';
+     HV_CONTROL_VALUE_NUM = 1;
+     HV_CONTROL_VALUE_STR = ' ';
+     EXEC SQL
+       INSERT INTO CONTROL
+              (CONTROL_NAME, CONTROL_VALUE_NUM, CONTROL_VALUE_STR)
+       VALUES (:HV_CONTROL_NAME, :HV_CONTROL_VALUE_NUM,
+               :HV_CONTROL_VALUE_STR);
+
+     HV_CONTROL_NAME = 'BANKZCUST0005OCCS  ';
+     HV_CONTROL_VALUE_NUM = 0;
+     EXEC SQL
+       INSERT INTO CONTROL
+              (CONTROL_NAME, CONTROL_VALUE_NUM, CONTROL_VALUE_STR)
+       VALUES (:HV_CONTROL_NAME, :HV_CONTROL_VALUE_NUM,
+               :HV_CONTROL_VALUE_STR);
+
+     HV_CONTROL_NAME = 'BANKZCUST0006OCCS  ';
+     EXEC SQL
+       INSERT INTO CONTROL
+              (CONTROL_NAME, CONTROL_VALUE_NUM, CONTROL_VALUE_STR)
+       VALUES (:HV_CONTROL_NAME, :HV_CONTROL_VALUE_NUM,
+               :HV_CONTROL_VALUE_STR);
+
+     HV_CONTROL_NAME = 'BANKZCUST0007OCCS  ';
+     EXEC SQL
+       INSERT INTO CONTROL
+              (CONTROL_NAME, CONTROL_VALUE_NUM, CONTROL_VALUE_STR)
+       VALUES (:HV_CONTROL_NAME, :HV_CONTROL_VALUE_NUM,
+               :HV_CONTROL_VALUE_STR);
+
+     HV_CONTROL_NAME = 'BANKZCUST0008OCCS  ';
+     EXEC SQL
+       INSERT INTO CONTROL
+              (CONTROL_NAME, CONTROL_VALUE_NUM, CONTROL_VALUE_STR)
+       VALUES (:HV_CONTROL_NAME, :HV_CONTROL_VALUE_NUM,
+               :HV_CONTROL_VALUE_STR);
+
+     HV_CONTROL_NAME = 'BANKZCUST0009OCCS  ';
+     EXEC SQL
+       INSERT INTO CONTROL
+              (CONTROL_NAME, CONTROL_VALUE_NUM, CONTROL_VALUE_STR)
+       VALUES (:HV_CONTROL_NAME, :HV_CONTROL_VALUE_NUM,
+               :HV_CONTROL_VALUE_STR);
+
+     /* ACCOUNT-LAST and ACCOUNT-COUNT for default sortcode */
+     HV_CONTROL_NAME = ' ';
+     HV_CONTROL_NAME = SORTCODE || '-' || 'ACCOUNT-LAST';
+     HV_CONTROL_VALUE_NUM = 1;
+     HV_CONTROL_VALUE_STR = ' ';
+     EXEC SQL
+       INSERT INTO CONTROL
+              (CONTROL_NAME, CONTROL_VALUE_NUM, CONTROL_VALUE_STR)
+       VALUES (:HV_CONTROL_NAME, :HV_CONTROL_VALUE_NUM,
+               :HV_CONTROL_VALUE_STR);
+
+     HV_CONTROL_NAME = ' ';
+     HV_CONTROL_NAME = SORTCODE || '-' || 'ACCOUNT-COUNT';
+     HV_CONTROL_VALUE_NUM = 1;
+     EXEC SQL
+       INSERT INTO CONTROL
+              (CONTROL_NAME, CONTROL_VALUE_NUM, CONTROL_VALUE_STR)
+       VALUES (:HV_CONTROL_NAME, :HV_CONTROL_VALUE_NUM,
+               :HV_CONTROL_VALUE_STR);
+
+   END INSERT_INITIAL_CONTROL_RECORDS;
+
+   /*****************************************************************/
+   /* GET_TODAYS_DATE - Store today as integer and YYYYMMDD string  */
+   /*****************************************************************/
+   GET_TODAYS_DATE: PROC;
+     DCL CURR_DT CHAR(8);
+     CURR_DT = SUBSTR(DATETIME(), 1, 8);
+     WS_CURRENT_DATE_9 = CURR_DT;
+     WS_TODAY_INT = DAYS(CURR_DT, 'YYYYMMDD');
+   END GET_TODAYS_DATE;
+
+   /*****************************************************************/
+   /* PARSE_PARM - Parse comma-separated parm string               */
+   /*****************************************************************/
+   PARSE_PARM: PROC;
+     DCL PARM_STR CHAR(256);
+     DCL POS      FIXED BIN(31);
+     DCL FN       FIXED BIN(31);
+     DCL CH       CHAR(1);
+     DCL FV       CHAR(10);
+
+     /* In batch PL/I, SYSIN or PARM is accessed via FETCH */
+     /* For z/OS batch we read PARM from SYSIN substitution */
+     /* Simple approach: set defaults if no parm available */
+     START_KEY       = 1;
+     END_KEY         = 100;
+     STEP_KEY        = 1;
+     RANDOM_SEED_NUM = 12345;
+   END PARSE_PARM;
+
+   /*****************************************************************/
+   /* SET_REASON_CODE - Map SQLERRD(3) to reason text              */
+   /*****************************************************************/
+   SET_REASON_CODE: PROC;
+     SELECT;
+       WHEN (SQLERRD(3) = 13172878)
+         DISP_REASON_CODE = 'TIMEOUT  (00C900E)';
+       WHEN (SQLERRD(3) = 13172872)
+         DISP_REASON_CODE = 'DEADLOCK (00C9088)';
+       OTHERWISE
+         DISP_REASON_CODE = 'Unknown ReasonCode';
+     END;
+   END SET_REASON_CODE;
+
+   /*****************************************************************/
+   /* DO_TIMESTAMP - Log timestamp using CEEGMT + CEEDATM          */
+   /*****************************************************************/
+   DO_TIMESTAMP: PROC;
+     CALL CEEGMT (GMT_LILIAN, GMT_SECONDS, FC);
+     PERIOD_NEXT = GMT_SECONDS;
+     CALL CEEDATM(PERIOD_NEXT, DATM_PICTURE, DATM_CONV, FC);
+     PERIOD_NEXT_F = SUBSTR(DATM_CONV, 1, 14);
+     PUT SKIP LIST(TIMESTAMP_FUNCTION || ' AT ' || PERIOD_NEXT_F);
+   END DO_TIMESTAMP;
+
+ END BANKDATA;

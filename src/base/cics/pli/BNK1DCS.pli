@@ -1,0 +1,979 @@
+*PROCESS SYSTEM(CICS) MARGINS(1,72);
+ /***************************************************************** */
+ /*                                                                */
+ /*  Copyright IBM Corp. 2023                                      */
+ /*                                                                */
+ /***************************************************************** */
+ /***************************************************************** */
+ /* BNK1DCS - BMS Screen handler for Display/Delete/Update Cust  */
+ /* Retrieves customer data (INQCUST), deletes (DELCUS) or        */
+ /* updates (UPDCUST). Transaction: ODCS                          */
+ /***************************************************************** */
+ BNK1DCS: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
+
+   DCL COMM_AREA_PTR POINTER;
+
+   /*****************************************************************/
+   /* DFHCOMMAREA - customer display/update commarea               */
+   /*****************************************************************/
+   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR),
+     3 COMM_TERM         FIXED BIN(31),
+     3 COMM_EYE          CHAR(4),
+     3 COMM_SCODE        CHAR(6),
+     3 COMM_CUSTNO       CHAR(10),
+     3 COMM_TITLE        CHAR(10),
+     3 COMM_FIRST_NAME   CHAR(50),
+     3 COMM_LAST_NAME    CHAR(50),
+     3 COMM_DOB          CHAR(8),
+     3 COMM_PHONE        CHAR(20),
+     3 COMM_ADDR_LINE1   CHAR(50),
+     3 COMM_ADDR_LINE2   CHAR(50),
+     3 COMM_CITY         CHAR(50),
+     3 COMM_POSTCODE     CHAR(10),
+     3 COMM_COUNTRY      CHAR(50),
+     3 COMM_STATUS       CHAR(10),
+     3 COMM_CREATED_DATE CHAR(8),
+     3 COMM_CREDIT_SCORE CHAR(3),
+     3 COMM_CS_REVIEW_DATE CHAR(8),
+     3 COMM_DEL_SUCCESS  CHAR(1),
+     3 COMM_DEL_FAIL_CD  CHAR(1),
+     3 COMM_UPD          CHAR(1);
+
+   /*****************************************************************/
+   /* BMS map                                                       */
+   /*****************************************************************/
+   DCL 1 BNK1DCI_MAP,
+   %INCLUDE BNK1DCM;
+
+   /*****************************************************************/
+   /* AID key definitions                                           */
+   /*****************************************************************/
+   %INCLUDE DFHAID;
+
+   /*****************************************************************/
+   /* INQCUST commarea                                              */
+   /*****************************************************************/
+   DCL 1 INQCUST_COMMAREA,
+   %INCLUDE INQCUSTZ;
+
+   /*****************************************************************/
+   /* DELCUS commarea                                               */
+   /*****************************************************************/
+   DCL 1 DELCUS_COMMAREA,
+   %INCLUDE DELCUS;
+
+   /*****************************************************************/
+   /* UPDCUST commarea                                              */
+   /*****************************************************************/
+   DCL 1 UPDCUST_COMMAREA,
+   %INCLUDE UPDCUST;
+
+   /*****************************************************************/
+   /* ABNDINFO                                                      */
+   /*****************************************************************/
+   DCL 1 ABNDINFO_REC,
+   %INCLUDE ABNDINFO;
+
+   /*****************************************************************/
+   /* Working storage                                               */
+   /*****************************************************************/
+   DCL WS_CICS_RESP        FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2       FIXED BIN(31) INIT(0);
+
+   DCL 1 WS_FAIL_INFO,
+     3 WS_FAIL_PROG          CHAR(9)  INIT('BNK1DCS  '),
+     3 WS_CICS_FAIL_MSG      CHAR(70) INIT(' '),
+     3 WS_CICS_FAIL_RESP_LIT CHAR(6)  INIT(' RESP='),
+     3 WS_CICS_RESP_DISP     CHAR(10) INIT('0000000000'),
+     3 WS_CICS_FAIL_RSP2_LIT CHAR(7)  INIT(' RESP2='),
+     3 WS_CICS_RESP2_DISP    CHAR(10) INIT('0000000000'),
+     3 WS_CICS_ABENDING      CHAR(15) INIT(' ABENDING TASK.');
+
+   DCL VALID_DATA_SW   CHAR(1) INIT('Y');
+   DCL SEND_FLAG       CHAR(1) INIT(' ');
+   /* SEND_FLAG: 'E'=ERASE 'D'=DATAONLY 'A'=DATAONLY+ALARM */
+
+   DCL END_OF_SESSION_MSG CHAR(13) INIT('Session Ended');
+   DCL WS_ABEND_PGM    CHAR(8)  INIT('ABNDPROC');
+
+   /* Terminal UCTRANS */
+   DCL WS_UCTRANS     FIXED BIN(31) INIT(0);
+   DCL STORED_UCTRANS FIXED BIN(31) INIT(0);
+
+   /* Working commarea copy */
+   DCL 1 WS_COMM_AREA,
+     3 WS_COMM_TERM         FIXED BIN(31),
+     3 WS_COMM_EYE          CHAR(4),
+     3 WS_COMM_SCODE        CHAR(6),
+     3 WS_COMM_CUSTNO       CHAR(10),
+     3 WS_COMM_TITLE        CHAR(10),
+     3 WS_COMM_FIRST_NAME   CHAR(50),
+     3 WS_COMM_LAST_NAME    CHAR(50),
+     3 WS_COMM_DOB          CHAR(8),
+     3 WS_COMM_PHONE        CHAR(20),
+     3 WS_COMM_ADDR_LINE1   CHAR(50),
+     3 WS_COMM_ADDR_LINE2   CHAR(50),
+     3 WS_COMM_CITY         CHAR(50),
+     3 WS_COMM_POSTCODE     CHAR(10),
+     3 WS_COMM_COUNTRY      CHAR(50),
+     3 WS_COMM_STATUS       CHAR(10),
+     3 WS_COMM_CREATED_DATE CHAR(8),
+     3 WS_COMM_CREDIT_SCORE CHAR(3),
+     3 WS_COMM_CS_REVIEW_DT CHAR(8),
+     3 WS_COMM_DEL_SUCCESS  CHAR(1),
+     3 WS_COMM_DEL_FAIL_CD  CHAR(1),
+     3 WS_COMM_UPDATE       CHAR(1);
+
+   /* DOB parsing helper */
+   DCL 1 COMM_DOB_SPLIT,
+     3 COMM_DOB_SPLIT_DD   CHAR(2),
+     3 COMM_DOB_SPLIT_MM   CHAR(2),
+     3 COMM_DOB_SPLIT_YYYY CHAR(4);
+
+   /* Credit score conversion */
+   DCL CREDIT_SCORE_X     CHAR(3) INIT(' ');
+   DCL CREDIT_SCORE_9     FIXED BIN(15) INIT(0);
+
+   /* CS review date parsing helper */
+   DCL 1 COMM_CS_REVIEW_UPD,
+     3 COMM_CS_REVIEWX_DD   CHAR(2),
+     3 COMM_CS_REVIEWX_MM   CHAR(2),
+     3 COMM_CS_REVIEWX_YYYY CHAR(4);
+
+   /* DOB update helper */
+   DCL 1 COMM_DOB_UPD,
+     3 COMM_DOBX_DD   CHAR(2),
+     3 COMM_DOBX_MM   CHAR(2),
+     3 COMM_DOBX_YYYY CHAR(4);
+
+   /* Title validation */
+   DCL WS_UNSTR_TITLE  CHAR(9)  INIT(' ');
+   DCL WS_TITLE_VALID  CHAR(1)  INIT(' ');
+
+   /* Date/time */
+   DCL WS_U_TIME        FIXED DEC(15) INIT(0);
+   DCL WS_ORIG_DATE     CHAR(10)      INIT(' ');
+   DCL WS_TIME_NOW      CHAR(6)       INIT(' ');
+   DCL WS_TIME_HH       CHAR(2)       INIT(' ');
+   DCL WS_TIME_MM_V     CHAR(2)       INIT(' ');
+   DCL WS_TIME_SS       CHAR(2)       INIT(' ');
+   DCL WS_ABND_TIME_STR CHAR(8)       INIT(' ');
+   DCL WS_ABND_FREEFORM CHAR(255)     INIT(' ');
+
+   /*****************************************************************/
+   /* Internal procedure declarations                               */
+   /*****************************************************************/
+   DCL PROCESS_MAP        ENTRY;
+   DCL RECEIVE_MAP        ENTRY;
+   DCL EDIT_DATA          ENTRY;
+   DCL EDIT_DATA2         ENTRY;
+   DCL VALIDATE_DATA      ENTRY;
+   DCL GET_CUST_DATA      ENTRY;
+   DCL DEL_CUST_DATA      ENTRY;
+   DCL UPDATE_CUST_DATA   ENTRY;
+   DCL UNPROT_CUST_DATA   ENTRY;
+   DCL SEND_MAP           ENTRY;
+   DCL STORE_TERM_DEF     ENTRY;
+   DCL RESTORE_TERM_DEF   ENTRY;
+   DCL SEND_TERMINATION   ENTRY;
+   DCL ABEND_THIS_TASK    ENTRY;
+   DCL POPULATE_TIME_DATE ENTRY;
+   DCL SETUP_ABND_INFO    ENTRY;
+
+   /*****************************************************************/
+   /* PREMIERE - main dispatch                                      */
+   /*****************************************************************/
+   EXEC CICS HANDLE ABEND LABEL(ABEND_HANDLING);
+
+   SELECT;
+     WHEN(EIBCALEN = 0)
+       DO;
+         BNK1DCI_MAP = LOW(LENGTH(BNK1DCI_MAP));
+         CUSTNOL = -1;
+         SEND_FLAG = 'E';
+         WS_COMM_AREA = '';
+         CALL STORE_TERM_DEF;
+         WS_COMM_TERM = STORED_UCTRANS;
+         CALL SEND_MAP;
+       END;
+     WHEN(EIBAID = DFHPA1 | EIBAID = DFHPA2 | EIBAID = DFHPA3)
+       ;  /* continue */
+     WHEN(EIBAID = DFHPF3)
+       DO;
+         CALL RESTORE_TERM_DEF;
+         EXEC CICS RETURN
+           TRANSID('OMEN')
+           IMMEDIATE
+           RESP(WS_CICS_RESP)
+           RESP2(WS_CICS_RESP2);
+       END;
+     WHEN(EIBAID = DFHPF5)
+       CALL PROCESS_MAP;
+     WHEN(EIBAID = DFHPF10)
+       CALL PROCESS_MAP;
+     WHEN(EIBAID = DFHAID | EIBAID = DFHPF12)
+       DO;
+         CALL RESTORE_TERM_DEF;
+         CALL SEND_TERMINATION;
+         EXEC CICS RETURN;
+       END;
+     WHEN(EIBAID = DFHCLEAR)
+       DO;
+         CALL RESTORE_TERM_DEF;
+         EXEC CICS SEND CONTROL
+           ERASE
+           FREEKB;
+         EXEC CICS RETURN;
+       END;
+     WHEN(EIBAID = DFHENTER)
+       CALL PROCESS_MAP;
+     OTHERWISE
+       DO;
+         MESSAGEI = 'Invalid key pressed.';
+         CUSTNOL = -1;
+         SEND_FLAG = 'A';
+         CALL SEND_MAP;
+       END;
+   END;
+
+   IF EIBCALEN ^= 0 THEN
+     DO;
+       WS_COMM_TERM         =
+         DFHCOMMAREA.COMM_TERM;
+       STORED_UCTRANS       = WS_COMM_TERM;
+       WS_COMM_EYE          = DFHCOMMAREA.COMM_EYE;
+       WS_COMM_SCODE        = DFHCOMMAREA.COMM_SCODE;
+       WS_COMM_CUSTNO       = DFHCOMMAREA.COMM_CUSTNO;
+       WS_COMM_TITLE        = DFHCOMMAREA.COMM_TITLE;
+       WS_COMM_FIRST_NAME   = DFHCOMMAREA.COMM_FIRST_NAME;
+       WS_COMM_LAST_NAME    = DFHCOMMAREA.COMM_LAST_NAME;
+       WS_COMM_PHONE        = DFHCOMMAREA.COMM_PHONE;
+       WS_COMM_ADDR_LINE1   = DFHCOMMAREA.COMM_ADDR_LINE1;
+       WS_COMM_ADDR_LINE2   = DFHCOMMAREA.COMM_ADDR_LINE2;
+       WS_COMM_CITY         = DFHCOMMAREA.COMM_CITY;
+       WS_COMM_POSTCODE     = DFHCOMMAREA.COMM_POSTCODE;
+       WS_COMM_COUNTRY      = DFHCOMMAREA.COMM_COUNTRY;
+       WS_COMM_STATUS       = DFHCOMMAREA.COMM_STATUS;
+       WS_COMM_CREATED_DATE =
+         DFHCOMMAREA.COMM_CREATED_DATE;
+       WS_COMM_DOB          = DFHCOMMAREA.COMM_DOB;
+       WS_COMM_CREDIT_SCORE =
+         DFHCOMMAREA.COMM_CREDIT_SCORE;
+       WS_COMM_CS_REVIEW_DT =
+         DFHCOMMAREA.COMM_CS_REVIEW_DATE;
+       WS_COMM_UPDATE       = DFHCOMMAREA.COMM_UPD;
+     END;
+
+   EXEC CICS RETURN
+     TRANSID('ODCS')
+     COMMAREA(WS_COMM_AREA)
+     LENGTH(LENGTH(WS_COMM_AREA))
+     RESP(WS_CICS_RESP)
+     RESP2(WS_CICS_RESP2);
+
+   IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+     DO;
+       CALL SETUP_ABND_INFO;
+       WS_ABND_FREEFORM =
+         'A010 - RETURN TRANSID(ODCS) FAIL.';
+       EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+         COMMAREA(ABNDINFO_REC);
+       WS_CICS_FAIL_MSG =
+         'BNK1DCS - A010 - RETURN TRANSID(ODCS) FAIL';
+       WS_CICS_RESP_DISP  = WS_CICS_RESP;
+       WS_CICS_RESP2_DISP = WS_CICS_RESP2;
+       CALL RESTORE_TERM_DEF;
+       CALL ABEND_THIS_TASK;
+     END;
+
+   /*****************************************************************/
+   /* PROCESS_MAP                                                   */
+   /*****************************************************************/
+   PROCESS_MAP: PROC;
+     CALL RECEIVE_MAP;
+     IF EIBAID = DFHENTER & WS_COMM_UPDATE ^= 'Y' THEN
+       DO;
+         CUSTNOL = -1;
+         CALL EDIT_DATA;
+         IF VALID_DATA_SW = 'Y' THEN
+           CALL GET_CUST_DATA;
+         ELSE
+           INQCUST_COMMAREA = '';
+       END;
+     IF EIBAID = DFHENTER & WS_COMM_UPDATE = 'Y' THEN
+       DO;
+         CALL EDIT_DATA2;
+         IF VALID_DATA_SW = 'Y' THEN
+           CALL UPDATE_CUST_DATA;
+       END;
+     IF EIBAID = DFHPF5 THEN
+       DO;
+         CALL EDIT_DATA;
+         CALL VALIDATE_DATA;
+         IF VALID_DATA_SW = 'Y' THEN
+           CALL DEL_CUST_DATA;
+         CUSTNOL = -1;
+       END;
+     IF EIBAID = DFHPF10 THEN
+       DO;
+         CALL EDIT_DATA;
+         CALL VALIDATE_DATA;
+         IF VALID_DATA_SW = 'Y' THEN
+           DO;
+             CALL UNPROT_CUST_DATA;
+             MESSAGEI = 'Amend data then press <ENTER>.';
+           END;
+       END;
+     SEND_FLAG = 'A';
+     CALL SEND_MAP;
+   END PROCESS_MAP;
+
+   /*****************************************************************/
+   /* RECEIVE_MAP - with ASIS (case-sensitive) receive             */
+   /*****************************************************************/
+   RECEIVE_MAP: PROC;
+     /* Inquire current UCTRANS setting */
+     EXEC CICS INQUIRE TERMINAL(EIBTRMID)
+       UCTRANST(WS_UCTRANS)
+       RESP(WS_CICS_RESP)
+       RESP2(WS_CICS_RESP2);
+     /* If UC translation on, disable it for mixed-case input */
+     IF WS_UCTRANS = DFHVALUE(UCTRAN) |
+        WS_UCTRANS = DFHVALUE(TRANIDONLY) THEN
+       DO;
+         WS_UCTRANS = DFHVALUE(NOUCTRAN);
+         EXEC CICS SET TERMINAL(EIBTRMID)
+           UCTRANST(WS_UCTRANS)
+           RESP(WS_CICS_RESP)
+           RESP2(WS_CICS_RESP2);
+         IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+           DO;
+             CALL SETUP_ABND_INFO;
+             WS_ABND_FREEFORM =
+               'RM010 (1) - SET TERMINAL UC FAIL';
+             EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+               COMMAREA(ABNDINFO_REC);
+             WS_CICS_FAIL_MSG =
+               'BNK1DCS - RM010 (1) - SET TERMINAL UC FAIL';
+             WS_CICS_RESP_DISP  = WS_CICS_RESP;
+             WS_CICS_RESP2_DISP = WS_CICS_RESP2;
+             CALL RESTORE_TERM_DEF;
+             CALL ABEND_THIS_TASK;
+           END;
+       END;
+     EXEC CICS RECEIVE MAP('BNK1DC')
+       MAPSET('BNK1DCM')
+       INTO(BNK1DCI_MAP)
+       TERMINAL
+       ASIS
+       RESP(WS_CICS_RESP)
+       RESP2(WS_CICS_RESP2);
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+       DO;
+         CALL SETUP_ABND_INFO;
+         WS_ABND_FREEFORM = 'RM010 - RECEIVE MAP FAIL.';
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+           COMMAREA(ABNDINFO_REC);
+         WS_CICS_FAIL_MSG =
+           'BNK1DCS - RM010 - RECEIVE MAP FAIL';
+         WS_CICS_RESP_DISP  = WS_CICS_RESP;
+         WS_CICS_RESP2_DISP = WS_CICS_RESP2;
+         CALL RESTORE_TERM_DEF;
+         CALL ABEND_THIS_TASK;
+       END;
+     /* Feed back to INQCUST commarea from map fields */
+     INQCUST_COMMAREA.INQCUST_CUSTNO = CUSTNOI;
+     INQCUST_COMMAREA.INQCUST_SCODE  = SORTCI;
+   END RECEIVE_MAP;
+
+   /*****************************************************************/
+   /* EDIT_DATA - basic validation                                 */
+   /*****************************************************************/
+   EDIT_DATA: PROC;
+     IF CUSTNOL = 0 | CUSTNOI = LOW(10) THEN
+       DO;
+         MESSAGEI = 'Please enter a customer number.';
+         VALID_DATA_SW = 'N';
+         CUSTNOL = -1;
+         RETURN;
+       END;
+     EXEC CICS BIF DEEDIT FIELD(CUSTNOI);
+     IF VERIFY(CUSTNOI,'0123456789') ^= 0 THEN
+       DO;
+         MESSAGEI = 'Please enter a customer number.';
+         VALID_DATA_SW = 'N';
+         CUSTNOL = -1;
+       END;
+   END EDIT_DATA;
+
+   /*****************************************************************/
+   /* EDIT_DATA2 - update validation (title, address)              */
+   /*****************************************************************/
+   EDIT_DATA2: PROC;
+     WS_UNSTR_TITLE = CUSTTITLI;
+     WS_TITLE_VALID = ' ';
+     SELECT(WS_UNSTR_TITLE);
+       WHEN('Professor')  WS_TITLE_VALID = 'Y';
+       WHEN('Mr       ')  WS_TITLE_VALID = 'Y';
+       WHEN('Mrs      ')  WS_TITLE_VALID = 'Y';
+       WHEN('Miss     ')  WS_TITLE_VALID = 'Y';
+       WHEN('Ms       ')  WS_TITLE_VALID = 'Y';
+       WHEN('Dr       ')  WS_TITLE_VALID = 'Y';
+       WHEN('Drs      ')  WS_TITLE_VALID = 'Y';
+       WHEN('Lord     ')  WS_TITLE_VALID = 'Y';
+       WHEN('Sir      ')  WS_TITLE_VALID = 'Y';
+       WHEN('Lady     ')  WS_TITLE_VALID = 'Y';
+       OTHERWISE          WS_TITLE_VALID = 'N';
+     END;
+     IF WS_TITLE_VALID = 'N' THEN
+       DO;
+         MESSAGEI =
+           'Valid titles:Mr,Mrs,Miss,Ms,Dr,Professor,Drs,Lord,Sir,Lady';
+         VALID_DATA_SW = 'N';
+         CUSTTITLL = -1;
+       END;
+     IF CUSTAD1I = ' ' & CUSTAD2I = ' ' & CUSTCITYI = ' ' THEN
+       DO;
+         MESSAGEI = 'Address must not be all spaces - please reenter';
+         VALID_DATA_SW = 'N';
+         CUSTAD1L = -1;
+       END;
+   END EDIT_DATA2;
+
+   /*****************************************************************/
+   /* VALIDATE_DATA                                                 */
+   /*****************************************************************/
+   VALIDATE_DATA: PROC;
+     IF INQCUST_COMMAREA.INQCUST_SCODE = '000000' THEN
+       DO;
+         VALID_DATA_SW = 'N';
+         MESSAGEI =
+           'The Sort code / Customer number is not VALID.';
+       END;
+     IF CUSTNOI = '0000000000' | CUSTNOI = '9999999999' THEN
+       DO;
+         VALID_DATA_SW = 'N';
+         MESSAGEI = 'The customer number is not VALID.';
+       END;
+   END VALIDATE_DATA;
+
+   /*****************************************************************/
+   /* GET_CUST_DATA - link to INQCUST                             */
+   /*****************************************************************/
+   GET_CUST_DATA: PROC;
+     INQCUST_COMMAREA = '';
+     INQCUST_COMMAREA.INQCUST_CUSTNO = CUSTNOI;
+     EXEC CICS LINK PROGRAM('INQCUST')
+       COMMAREA(INQCUST_COMMAREA)
+       RESP(WS_CICS_RESP)
+       RESP2(WS_CICS_RESP2)
+       SYNCONRETURN;
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+       DO;
+         CALL SETUP_ABND_INFO;
+         WS_ABND_FREEFORM = 'GCD010 - LINK INQCUST FAIL.';
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+           COMMAREA(ABNDINFO_REC);
+         WS_CICS_FAIL_MSG =
+           'BNK1DCS - GCD010 - LINK INQCUST FAIL';
+         WS_CICS_RESP_DISP  = WS_CICS_RESP;
+         WS_CICS_RESP2_DISP = WS_CICS_RESP2;
+         CALL RESTORE_TERM_DEF;
+         CALL ABEND_THIS_TASK;
+       END;
+     IF INQCUST_COMMAREA.INQCUST_FIRST_NAME = ' ' &
+        INQCUST_COMMAREA.INQCUST_LAST_NAME  = ' ' &
+        INQCUST_COMMAREA.INQCUST_ADDR_LINE1 = ' ' THEN
+       DO;
+         MESSAGEI =
+           'Sorry, but that customer number was not found.';
+         VALID_DATA_SW = 'N';
+         SORTCI    = ' ';
+         CUSTNO2I  = ' ';
+         CUSTTITLI = ' ';
+         CUSTFNAMI = ' ';
+         CUSTLNAMI = ' ';
+         CUSTAD1I  = ' ';
+         CUSTAD2I  = ' ';
+         CUSTCITYI = ' ';
+         CUSTPOSTI = ' ';
+         CUSTCTRYI = ' ';
+         DOBDDI    = ' ';
+         DOBMMI    = ' ';
+         DOBYYI    = ' ';
+         CREDSCI   = ' ';
+         SCRDTDDI  = ' ';
+         SCRDTMMI  = ' ';
+         SCRDTYYI  = ' ';
+         CUSTNOL   = -1;
+         RETURN;
+       END;
+     SORTCI    = INQCUST_COMMAREA.INQCUST_SCODE;
+     CUSTNO2I  = INQCUST_COMMAREA.INQCUST_CUSTNO;
+     CUSTTITLI = INQCUST_COMMAREA.INQCUST_TITLE;
+     CUSTFNAMI = INQCUST_COMMAREA.INQCUST_FIRST_NAME;
+     CUSTLNAMI = INQCUST_COMMAREA.INQCUST_LAST_NAME;
+     CUSTAD1I  = INQCUST_COMMAREA.INQCUST_ADDR_LINE1;
+     CUSTAD2I  = INQCUST_COMMAREA.INQCUST_ADDR_LINE2;
+     CUSTCITYI = INQCUST_COMMAREA.INQCUST_CITY;
+     CUSTPOSTI = INQCUST_COMMAREA.INQCUST_POSTCODE;
+     CUSTCTRYI = INQCUST_COMMAREA.INQCUST_COUNTRY;
+     DOBDDI    = INQCUST_COMMAREA.INQCUST_DOB_DD;
+     DOBMMI    = INQCUST_COMMAREA.INQCUST_DOB_MM;
+     DOBYYI    = INQCUST_COMMAREA.INQCUST_DOB_YYYY;
+     CREDIT_SCORE_X  = INQCUST_COMMAREA.INQCUST_CREDIT_SCORE;
+     CREDSCI   = CREDIT_SCORE_X;
+     SCRDTDDI  = INQCUST_COMMAREA.INQCUST_CS_REVIEW_DD;
+     SCRDTMMI  = INQCUST_COMMAREA.INQCUST_CS_REVIEW_MM;
+     SCRDTYYI  = INQCUST_COMMAREA.INQCUST_CS_REVIEW_YYYY;
+     MESSAGEI  =
+       'Customer lookup successful. <PF5> Delete. <PF10> Update.';
+   END GET_CUST_DATA;
+
+   /*****************************************************************/
+   /* DEL_CUST_DATA - link to DELCUS                              */
+   /*****************************************************************/
+   DEL_CUST_DATA: PROC;
+     DELCUS_COMMAREA = '';
+     DELCUS_COMMAREA.COMM_SCODE  = SORTCI;
+     DELCUS_COMMAREA.COMM_CUSTNO = CUSTNO2I;
+     EXEC CICS LINK PROGRAM('DELCUS')
+       COMMAREA(DELCUS_COMMAREA)
+       RESP(WS_CICS_RESP)
+       RESP2(WS_CICS_RESP2)
+       SYNCONRETURN;
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+       DO;
+         CALL SETUP_ABND_INFO;
+         WS_ABND_FREEFORM = 'DCD010 - LINK DELCUS FAIL.';
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+           COMMAREA(ABNDINFO_REC);
+         WS_CICS_FAIL_MSG =
+           'BNK1DCS - DCD010 - LINK DELCUS FAIL';
+         WS_CICS_RESP_DISP  = WS_CICS_RESP;
+         WS_CICS_RESP2_DISP = WS_CICS_RESP2;
+         CALL RESTORE_TERM_DEF;
+         CALL ABEND_THIS_TASK;
+       END;
+     IF DELCUS_COMMAREA.COMM_DEL_SUCCESS = 'N' THEN
+       DO;
+         VALID_DATA_SW = 'N';
+         SELECT(DELCUS_COMMAREA.COMM_DEL_FAIL_CD);
+           WHEN('1')
+             MESSAGEI =
+               'Sorry Cust no not found. Customer NOT deleted.';
+           WHEN('2')
+             MESSAGEI =
+               'Sorry datastore error. Action NOT applied.';
+           WHEN('3')
+             MESSAGEI =
+               'Sorry delete error. Customer NOT deleted.';
+           OTHERWISE
+             MESSAGEI =
+               'Sorry error occurred. Customer NOT deleted.';
+         END;
+         SORTCI = DELCUS_COMMAREA.COMM_SCODE;
+         RETURN;
+       END;
+     SORTCI    = ' ';
+     CUSTNO2I  = ' ';
+     CUSTTITLI = ' ';
+     CUSTFNAMI = ' ';
+     CUSTLNAMI = ' ';
+     CUSTAD1I  = ' ';
+     CUSTAD2I  = ' ';
+     CUSTCITYI = ' ';
+     CUSTPOSTI = ' ';
+     CUSTCTRYI = ' ';
+     DOBDDI    = ' ';
+     DOBMMI    = ' ';
+     DOBYYI    = ' ';
+     CREDSCI   = ' ';
+     SCRDTDDI  = ' ';
+     SCRDTMMI  = ' ';
+     SCRDTYYI  = ' ';
+     MESSAGEI  = 'Customer ' ||
+       TRIM(DELCUS_COMMAREA.COMM_CUSTNO) ||
+       ' and associated accounts were successfully deleted.';
+   END DEL_CUST_DATA;
+
+   /*****************************************************************/
+   /* UPDATE_CUST_DATA - link to UPDCUST                          */
+   /*****************************************************************/
+   UPDATE_CUST_DATA: PROC;
+     UPDCUST_COMMAREA = '';
+     UPDCUST_COMMAREA.COMM_EYE        = 'CUST';
+     UPDCUST_COMMAREA.COMM_SCODE      = SORTCI;
+     UPDCUST_COMMAREA.COMM_CUSTNO     = CUSTNO2I;
+     UPDCUST_COMMAREA.COMM_TITLE      = CUSTTITLI;
+     UPDCUST_COMMAREA.COMM_FIRST_NAME = CUSTFNAMI;
+     UPDCUST_COMMAREA.COMM_LAST_NAME  = CUSTLNAMI;
+     UPDCUST_COMMAREA.COMM_ADDR_LINE1 = CUSTAD1I;
+     UPDCUST_COMMAREA.COMM_ADDR_LINE2 = CUSTAD2I;
+     UPDCUST_COMMAREA.COMM_CITY       = CUSTCITYI;
+     UPDCUST_COMMAREA.COMM_POSTCODE   = CUSTPOSTI;
+     UPDCUST_COMMAREA.COMM_COUNTRY    = CUSTCTRYI;
+     /* DOB */
+     COMM_DOBX_DD   = DOBDDI;
+     COMM_DOBX_MM   = DOBMMI;
+     COMM_DOBX_YYYY = DOBYYI;
+     UPDCUST_COMMAREA.COMM_DOB_DAY    = COMM_DOBX_DD;
+     UPDCUST_COMMAREA.COMM_DOB_MONTH  = COMM_DOBX_MM;
+     UPDCUST_COMMAREA.COMM_DOB_YEAR   = COMM_DOBX_YYYY;
+     /* Credit score */
+     CREDIT_SCORE_X = CREDSCI;
+     ON ERROR BEGIN; CREDIT_SCORE_9 = 0; END;
+     CREDIT_SCORE_9 = FIXED(CREDIT_SCORE_X);
+     UPDCUST_COMMAREA.COMM_CREDIT_SCORE = CREDIT_SCORE_X;
+     /* CS review date */
+     COMM_CS_REVIEWX_DD   = SCRDTDDI;
+     COMM_CS_REVIEWX_MM   = SCRDTMMI;
+     COMM_CS_REVIEWX_YYYY = SCRDTYYI;
+     UPDCUST_COMMAREA.COMM_CS_REVIEW_DAY   =
+       COMM_CS_REVIEWX_DD;
+     UPDCUST_COMMAREA.COMM_CS_REVIEW_MONTH =
+       COMM_CS_REVIEWX_MM;
+     UPDCUST_COMMAREA.COMM_CS_REVIEW_YEAR  =
+       COMM_CS_REVIEWX_YYYY;
+     UPDCUST_COMMAREA.COMM_UPD_SUCCESS = ' ';
+     UPDCUST_COMMAREA.COMM_UPD_FAIL_CD = ' ';
+     EXEC CICS LINK PROGRAM('UPDCUST')
+       COMMAREA(UPDCUST_COMMAREA)
+       RESP(WS_CICS_RESP)
+       RESP2(WS_CICS_RESP2)
+       SYNCONRETURN;
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+       DO;
+         CALL SETUP_ABND_INFO;
+         WS_ABND_FREEFORM = 'UPDCD010 - LINK UPDCUST FAIL.';
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+           COMMAREA(ABNDINFO_REC);
+         WS_CICS_FAIL_MSG =
+           'BNK1DCS - UPDCD010 - LINK UPDCUST FAIL';
+         WS_CICS_RESP_DISP  = WS_CICS_RESP;
+         WS_CICS_RESP2_DISP = WS_CICS_RESP2;
+         CALL RESTORE_TERM_DEF;
+         CALL ABEND_THIS_TASK;
+       END;
+     IF UPDCUST_COMMAREA.COMM_UPD_SUCCESS = 'N' THEN
+       DO;
+         SELECT(UPDCUST_COMMAREA.COMM_UPD_FAIL_CD);
+           WHEN('1')
+             MESSAGEI =
+               'Sorry Cust no not found. Customer NOT updated.';
+           WHEN('2')
+             MESSAGEI =
+               'Sorry datastore error. Customer NOT updated.';
+           WHEN('3')
+             MESSAGEI =
+               'Sorry update error. Customer NOT updated.';
+           WHEN('T')
+             MESSAGEI =
+               'Sorry the title is invalid. Customer NOT updated.';
+           OTHERWISE
+             MESSAGEI =
+               'Sorry unknown error. Customer NOT updated.';
+         END;
+         VALID_DATA_SW = 'N';
+         SORTCI   = UPDCUST_COMMAREA.COMM_SCODE;
+         CUSTNO2L = -1;
+         RETURN;
+       END;
+     SORTCI    = UPDCUST_COMMAREA.COMM_SCODE;
+     CUSTNO2I  = UPDCUST_COMMAREA.COMM_CUSTNO;
+     CUSTTITLI = UPDCUST_COMMAREA.COMM_TITLE;
+     CUSTFNAMI = UPDCUST_COMMAREA.COMM_FIRST_NAME;
+     CUSTLNAMI = UPDCUST_COMMAREA.COMM_LAST_NAME;
+     CUSTAD1I  = UPDCUST_COMMAREA.COMM_ADDR_LINE1;
+     CUSTAD2I  = UPDCUST_COMMAREA.COMM_ADDR_LINE2;
+     CUSTCITYI = UPDCUST_COMMAREA.COMM_CITY;
+     CUSTPOSTI = UPDCUST_COMMAREA.COMM_POSTCODE;
+     CUSTCTRYI = UPDCUST_COMMAREA.COMM_COUNTRY;
+     COMM_DOB_SPLIT_DD   = UPDCUST_COMMAREA.COMM_DOB_DAY;
+     COMM_DOB_SPLIT_MM   = UPDCUST_COMMAREA.COMM_DOB_MONTH;
+     COMM_DOB_SPLIT_YYYY = UPDCUST_COMMAREA.COMM_DOB_YEAR;
+     DOBDDI = COMM_DOB_SPLIT_DD;
+     DOBMMI = COMM_DOB_SPLIT_MM;
+     DOBYYI = COMM_DOB_SPLIT_YYYY;
+     CREDIT_SCORE_X = UPDCUST_COMMAREA.COMM_CREDIT_SCORE;
+     CREDSCI = CREDIT_SCORE_X;
+     SCRDTDDI = UPDCUST_COMMAREA.COMM_CS_REVIEW_DAY;
+     SCRDTMMI = UPDCUST_COMMAREA.COMM_CS_REVIEW_MONTH;
+     SCRDTYYI = UPDCUST_COMMAREA.COMM_CS_REVIEW_YEAR;
+     MESSAGEI = 'Customer ' ||
+       TRIM(UPDCUST_COMMAREA.COMM_CUSTNO) ||
+       ' was updated successfully';
+     CUSTNOL = -1;
+   END UPDATE_CUST_DATA;
+
+   /*****************************************************************/
+   /* UNPROT_CUST_DATA - unprotect fields for editing              */
+   /*****************************************************************/
+   UNPROT_CUST_DATA: PROC;
+     DFHCOMMAREA.COMM_EYE          = 'CUST';
+     DFHCOMMAREA.COMM_SCODE        = SORTCI;
+     DFHCOMMAREA.COMM_CUSTNO       = CUSTNO2I;
+     DFHCOMMAREA.COMM_TITLE        = CUSTTITLI;
+     DFHCOMMAREA.COMM_FIRST_NAME   = CUSTFNAMI;
+     DFHCOMMAREA.COMM_LAST_NAME    = CUSTLNAMI;
+     DFHCOMMAREA.COMM_ADDR_LINE1   = CUSTAD1I;
+     DFHCOMMAREA.COMM_ADDR_LINE2   = CUSTAD2I;
+     DFHCOMMAREA.COMM_CITY         = CUSTCITYI;
+     DFHCOMMAREA.COMM_POSTCODE     = CUSTPOSTI;
+     DFHCOMMAREA.COMM_COUNTRY      = CUSTCTRYI;
+     COMM_DOBX_DD   = DOBDDI;
+     COMM_DOBX_MM   = DOBMMI;
+     COMM_DOBX_YYYY = DOBYYI;
+     DFHCOMMAREA.COMM_DOB = COMM_DOBX_DD ||
+       COMM_DOBX_MM || COMM_DOBX_YYYY;
+     CREDIT_SCORE_X = CREDSCI;
+     DFHCOMMAREA.COMM_CREDIT_SCORE = CREDIT_SCORE_X;
+     COMM_CS_REVIEWX_DD   = SCRDTDDI;
+     COMM_CS_REVIEWX_MM   = SCRDTMMI;
+     COMM_CS_REVIEWX_YYYY = SCRDTYYI;
+     DFHCOMMAREA.COMM_CS_REVIEW_DATE =
+       COMM_CS_REVIEWX_DD || COMM_CS_REVIEWX_MM ||
+       COMM_CS_REVIEWX_YYYY;
+     DFHCOMMAREA.COMM_UPD = 'Y';
+     /* Unprotect editable fields using attribute bytes */
+     CUSTTITLA = DFHGREEN;
+     CUSTTITLA = 'A';
+     CUSTFNAMA = DFHGREEN;
+     CUSTFNAMA = 'A';
+     CUSTLNAMA = DFHGREEN;
+     CUSTLNAMA = 'A';
+     CUSTTITLL = -1;
+     CUSTAD1A  = DFHGREEN;
+     CUSTAD1A  = 'A';
+     CUSTAD2A  = DFHGREEN;
+     CUSTAD2A  = 'A';
+     CUSTCITYA = DFHGREEN;
+     CUSTCITYA = 'A';
+     CUSTPOSTA = DFHGREEN;
+     CUSTPOSTA = 'A';
+     CUSTCTRYA = DFHGREEN;
+     CUSTCTRYA = 'A';
+     CUSTNOA   = DFHBMASK;
+   END UNPROT_CUST_DATA;
+
+   /*****************************************************************/
+   /* SEND_MAP                                                      */
+   /*****************************************************************/
+   SEND_MAP: PROC;
+     IF SEND_FLAG = 'E' THEN
+       DO;
+         EXEC CICS SEND MAP('BNK1DC')
+           MAPSET('BNK1DCM')
+           FROM(BNK1DCI_MAP)
+           ERASE
+           CURSOR
+           FREEKB
+           RESP(WS_CICS_RESP)
+           RESP2(WS_CICS_RESP2);
+         IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+           DO;
+             CALL SETUP_ABND_INFO;
+             WS_ABND_FREEFORM =
+               'SM010 - SEND MAP ERASE FAIL.';
+             EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+               COMMAREA(ABNDINFO_REC);
+             WS_CICS_FAIL_MSG =
+               'BNK1DCS - SM010 - SEND MAP ERASE FAIL';
+             WS_CICS_RESP_DISP  = WS_CICS_RESP;
+             WS_CICS_RESP2_DISP = WS_CICS_RESP2;
+             CALL RESTORE_TERM_DEF;
+             CALL ABEND_THIS_TASK;
+           END;
+         RETURN;
+       END;
+     IF SEND_FLAG = 'D' THEN
+       DO;
+         EXEC CICS SEND MAP('BNK1DC')
+           MAPSET('BNK1DCM')
+           FROM(BNK1DCI_MAP)
+           DATAONLY
+           CURSOR
+           FREEKB
+           RESP(WS_CICS_RESP)
+           RESP2(WS_CICS_RESP2);
+         IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+           DO;
+             CALL SETUP_ABND_INFO;
+             WS_ABND_FREEFORM =
+               'SM010 - SEND MAP DATAONLY FAIL.';
+             EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+               COMMAREA(ABNDINFO_REC);
+             WS_CICS_FAIL_MSG =
+               'BNK1DCS - SM010 - SEND MAP DATAONLY FAIL';
+             WS_CICS_RESP_DISP  = WS_CICS_RESP;
+             WS_CICS_RESP2_DISP = WS_CICS_RESP2;
+             CALL RESTORE_TERM_DEF;
+             CALL ABEND_THIS_TASK;
+           END;
+         RETURN;
+       END;
+     IF SEND_FLAG = 'A' THEN
+       DO;
+         EXEC CICS SEND MAP('BNK1DC')
+           MAPSET('BNK1DCM')
+           FROM(BNK1DCI_MAP)
+           DATAONLY
+           CURSOR
+           ALARM
+           FREEKB
+           RESP(WS_CICS_RESP)
+           RESP2(WS_CICS_RESP2);
+         IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+           DO;
+             CALL SETUP_ABND_INFO;
+             WS_ABND_FREEFORM =
+               'SM010 - SEND MAP DATAONLY ALARM FAIL.';
+             EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+               COMMAREA(ABNDINFO_REC);
+             WS_CICS_FAIL_MSG =
+               'BNK1DCS - SM010 - SEND MAP ALARM FAIL';
+             WS_CICS_RESP_DISP  = WS_CICS_RESP;
+             WS_CICS_RESP2_DISP = WS_CICS_RESP2;
+             CALL RESTORE_TERM_DEF;
+             CALL ABEND_THIS_TASK;
+           END;
+       END;
+   END SEND_MAP;
+
+   /*****************************************************************/
+   /* STORE_TERM_DEF - save and disable UCTRAN                    */
+   /*****************************************************************/
+   STORE_TERM_DEF: PROC;
+     EXEC CICS INQUIRE TERMINAL(EIBTRMID)
+       UCTRANST(WS_UCTRANS)
+       RESP(WS_CICS_RESP)
+       RESP2(WS_CICS_RESP2);
+     STORED_UCTRANS = WS_UCTRANS;
+     IF WS_UCTRANS = DFHVALUE(UCTRAN) |
+        WS_UCTRANS = DFHVALUE(TRANIDONLY) THEN
+       DO;
+         WS_UCTRANS = DFHVALUE(NOUCTRAN);
+         EXEC CICS SET TERMINAL(EIBTRMID)
+           UCTRANST(WS_UCTRANS)
+           RESP(WS_CICS_RESP)
+           RESP2(WS_CICS_RESP2);
+         IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+           DO;
+             CALL SETUP_ABND_INFO;
+             WS_ABND_FREEFORM =
+               'STD010 - SET TERMINAL UC FAIL.';
+             EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+               COMMAREA(ABNDINFO_REC);
+             WS_CICS_FAIL_MSG =
+               'BNK1DCS - STD010 - SET TERMINAL UC FAIL';
+             WS_CICS_RESP_DISP  = WS_CICS_RESP;
+             WS_CICS_RESP2_DISP = WS_CICS_RESP2;
+             CALL RESTORE_TERM_DEF;
+             CALL ABEND_THIS_TASK;
+           END;
+       END;
+   END STORE_TERM_DEF;
+
+   /*****************************************************************/
+   /* RESTORE_TERM_DEF - restore UCTRAN setting                   */
+   /*****************************************************************/
+   RESTORE_TERM_DEF: PROC;
+     IF STORED_UCTRANS = 0 THEN RETURN;
+     WS_UCTRANS = STORED_UCTRANS;
+     EXEC CICS SET TERMINAL(EIBTRMID)
+       UCTRANST(WS_UCTRANS)
+       RESP(WS_CICS_RESP)
+       RESP2(WS_CICS_RESP2);
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+       DO;
+         CALL SETUP_ABND_INFO;
+         WS_ABND_FREEFORM =
+           'RTD010 - SET TERMINAL UC FAIL.';
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+           COMMAREA(ABNDINFO_REC);
+         WS_CICS_FAIL_MSG =
+           'BNK1DCS - RTD010 - SET TERMINAL UC FAIL';
+         WS_CICS_RESP_DISP  = WS_CICS_RESP;
+         WS_CICS_RESP2_DISP = WS_CICS_RESP2;
+         CALL ABEND_THIS_TASK;
+       END;
+   END RESTORE_TERM_DEF;
+
+   /*****************************************************************/
+   /* SEND_TERMINATION                                              */
+   /*****************************************************************/
+   SEND_TERMINATION: PROC;
+     EXEC CICS SEND TEXT
+       FROM(END_OF_SESSION_MSG)
+       ERASE
+       FREEKB
+       RESP(WS_CICS_RESP)
+       RESP2(WS_CICS_RESP2);
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+       DO;
+         CALL SETUP_ABND_INFO;
+         WS_ABND_FREEFORM = 'STM010 - SEND TEXT FAIL.';
+         EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+           COMMAREA(ABNDINFO_REC);
+         WS_CICS_FAIL_MSG =
+           'BNK1DCS - STM010 - SEND TEXT FAIL';
+         WS_CICS_RESP_DISP  = WS_CICS_RESP;
+         WS_CICS_RESP2_DISP = WS_CICS_RESP2;
+         CALL RESTORE_TERM_DEF;
+         CALL ABEND_THIS_TASK;
+       END;
+   END SEND_TERMINATION;
+
+   /*****************************************************************/
+   /* ABEND_THIS_TASK                                               */
+   /*****************************************************************/
+   ABEND_THIS_TASK: PROC;
+     EXEC CICS ABEND ABCODE('HBNK') NODUMP CANCEL;
+   END ABEND_THIS_TASK;
+
+   /*****************************************************************/
+   /* POPULATE_TIME_DATE                                            */
+   /*****************************************************************/
+   POPULATE_TIME_DATE: PROC;
+     EXEC CICS ASKTIME ABSTIME(WS_U_TIME);
+     EXEC CICS FORMATTIME ABSTIME(WS_U_TIME)
+       DDMMYYYY(WS_ORIG_DATE)
+       TIME(WS_TIME_NOW)
+       DATESEP;
+     WS_TIME_HH   = SUBSTR(WS_TIME_NOW,1,2);
+     WS_TIME_MM_V = SUBSTR(WS_TIME_NOW,3,2);
+     WS_TIME_SS   = SUBSTR(WS_TIME_NOW,5,2);
+   END POPULATE_TIME_DATE;
+
+   /*****************************************************************/
+   /* SETUP_ABND_INFO                                               */
+   /*****************************************************************/
+   SETUP_ABND_INFO: PROC;
+     ABNDINFO_REC = '';
+     ABNDINFO_REC.ABND_RESPCODE  = EIBRESP;
+     ABNDINFO_REC.ABND_RESP2CODE = EIBRESP2;
+     EXEC CICS ASSIGN APPLID(ABNDINFO_REC.ABND_APPLID);
+     ABNDINFO_REC.ABND_TASKNO_KEY = EIBTASKN;
+     ABNDINFO_REC.ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABNDINFO_REC.ABND_DATE  = WS_ORIG_DATE;
+     WS_ABND_TIME_STR = WS_TIME_HH || ':' ||
+       WS_TIME_MM_V || ':' || WS_TIME_SS;
+     ABNDINFO_REC.ABND_TIME  = WS_ABND_TIME_STR;
+     ABNDINFO_REC.ABND_UTIME_KEY = WS_U_TIME;
+     ABNDINFO_REC.ABND_CODE  = 'HBNK';
+     EXEC CICS ASSIGN PROGRAM(ABNDINFO_REC.ABND_PROGRAM);
+     ABNDINFO_REC.ABND_SQLCODE = 0;
+     ABNDINFO_REC.ABND_FREEFORM = WS_ABND_FREEFORM;
+   END SETUP_ABND_INFO;
+
+   /*****************************************************************/
+   /* ABEND_HANDLING - CICS abend handler label                    */
+   /*****************************************************************/
+   ABEND_HANDLING: PROC;
+     CALL RESTORE_TERM_DEF;
+     EXEC CICS HANDLE ABEND CANCEL;
+     CALL ABEND_THIS_TASK;
+   END ABEND_HANDLING;
+
+ END BNK1DCS;

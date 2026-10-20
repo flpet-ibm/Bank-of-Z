@@ -1,0 +1,214 @@
+*PROCESS SYSTEM(CICS) SQL MARGINS(1,72);
+ /* **************************************************************** */
+ /*                                                                */
+ /*  Copyright IBM Corp. 2023                                      */
+ /*                                                                */
+ /* **************************************************************** */
+ /* UPDACC - Update Account details (type, interest rate, overdraft */
+ /* limit) in DB2. Balance updates are NOT permitted here.         */
+ /* Converted from UPDACC.cbl                                      */
+ /* **************************************************************** */
+UPDACC: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
+
+   DCL COMM_AREA_PTR POINTER;
+
+   /* *************************************************************** */
+   /* DFHCOMMAREA - UPDACC COMMAREA                                  */
+   /* *************************************************************** */
+   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR),
+   %INCLUDE UPDACC;
+
+   /* *************************************************************** */
+   /* Sort code constant                                              */
+   /* *************************************************************** */
+   DCL SORTCODE CHAR(6) INIT('987654');
+
+   /* *************************************************************** */
+   /* DB2 table declarations                                         */
+   /* *************************************************************** */
+   EXEC SQL INCLUDE ACCDB2;
+
+   /* *************************************************************** */
+   /* ACCOUNT host variables for DB2                                 */
+   /* *************************************************************** */
+   DCL 1 HOST_ACCOUNT_ROW,
+     3 HV_ACCOUNT_EYECATCHER      CHAR(4),
+     3 HV_ACCOUNT_CUST_NO         CHAR(10),
+     3 HV_ACCOUNT_KEY,
+       5 HV_ACCOUNT_SORTCODE      CHAR(6),
+       5 HV_ACCOUNT_ACC_NO        CHAR(8),
+     3 HV_ACCOUNT_ACC_TYPE        CHAR(8),
+     3 HV_ACCOUNT_INT_RATE        FIXED DEC(6,2),
+     3 HV_ACCOUNT_OPENED          CHAR(10),
+     3 HV_ACCOUNT_OVERDRAFT_LIM   FIXED BIN(31),
+     3 HV_ACCOUNT_LAST_STMT       CHAR(10),
+     3 HV_ACCOUNT_NEXT_STMT       CHAR(10),
+     3 HV_ACCOUNT_AVAIL_BAL       FIXED DEC(12,2),
+     3 HV_ACCOUNT_ACTUAL_BAL      FIXED DEC(12,2);
+
+   /* *************************************************************** */
+   /* SQL Communication Area                                         */
+   /* *************************************************************** */
+   DCL 1 SQLCA,
+     3 SQLCAID     CHAR(8)          INIT('SQLCA   '),
+     3 SQLCABC     FIXED BIN(31)    INIT(136),
+     3 SQLCODE     FIXED BIN(31)    INIT(0),
+     3 SQLERRM,
+       5 SQLERRML  FIXED BIN(15)    INIT(0),
+       5 SQLERRMC  CHAR(70)         INIT(' '),
+     3 SQLERRP     CHAR(8)          INIT(' '),
+     3 SQLERRD    (6) FIXED BIN(31) INIT(0),
+     3 SQLWARN,
+       5 SQLWARN0  CHAR(1)          INIT(' '),
+       5 SQLWARN1  CHAR(1)          INIT(' '),
+       5 SQLWARN2  CHAR(1)          INIT(' '),
+       5 SQLWARN3  CHAR(1)          INIT(' '),
+       5 SQLWARN4  CHAR(1)          INIT(' '),
+       5 SQLWARN5  CHAR(1)          INIT(' '),
+       5 SQLWARN6  CHAR(1)          INIT(' '),
+       5 SQLWARN7  CHAR(1)          INIT(' '),
+     3 SQLSTATE    CHAR(5)          INIT(' ');
+
+   /* *************************************************************** */
+   /* Working variables                                              */
+   /* *************************************************************** */
+   DCL WS_CICS_RESP             FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2            FIXED BIN(31) INIT(0);
+   DCL SQLCODE_DISPLAY          CHAR(9)       INIT(' ');
+
+   DCL 1 DB2_DATE_REFORMAT,
+     3 DB2_DATE_REF_YR           CHAR(4),
+     3 FILLER_D1                 CHAR(1),
+     3 DB2_DATE_REF_MNTH         CHAR(2),
+     3 FILLER_D2                 CHAR(1),
+     3 DB2_DATE_REF_DAY          CHAR(2);
+
+   DCL 1 DESIRED_ACC_KEY,
+     3 DESIRED_SORT_CODE         CHAR(6) INIT('000000'),
+     3 DESIRED_ACC_NO            CHAR(8) INIT('00000000');
+
+   /* *************************************************************** */
+   /* PREMIERE SECTION                                               */
+   /* *************************************************************** */
+   COMM_SCODE       = SORTCODE;
+   DESIRED_SORT_CODE = SORTCODE;
+
+   CALL UPDATE_ACCOUNT_DB2;
+
+   CALL GET_ME_OUT_OF_HERE;
+
+   /* *************************************************************** */
+   /* UPDATE_ACCOUNT_DB2                                             */
+   /* *************************************************************** */
+   UPDATE_ACCOUNT_DB2: PROC;
+      DESIRED_ACC_NO        = COMM_ACCNO;
+      HV_ACCOUNT_SORTCODE   = DESIRED_SORT_CODE;
+      HV_ACCOUNT_ACC_NO     = DESIRED_ACC_NO;
+
+      EXEC SQL
+         SELECT ACCOUNT_EYECATCHER,
+                ACCOUNT_CUSTOMER_NUMBER,
+                ACCOUNT_SORTCODE,
+                ACCOUNT_NUMBER,
+                ACCOUNT_TYPE,
+                ACCOUNT_INTEREST_RATE,
+                ACCOUNT_OPENED,
+                ACCOUNT_OVERDRAFT_LIMIT,
+                ACCOUNT_LAST_STATEMENT,
+                ACCOUNT_NEXT_STATEMENT,
+                ACCOUNT_AVAILABLE_BALANCE,
+                ACCOUNT_ACTUAL_BALANCE
+         INTO  :HV_ACCOUNT_EYECATCHER,
+               :HV_ACCOUNT_CUST_NO,
+               :HV_ACCOUNT_SORTCODE,
+               :HV_ACCOUNT_ACC_NO,
+               :HV_ACCOUNT_ACC_TYPE,
+               :HV_ACCOUNT_INT_RATE,
+               :HV_ACCOUNT_OPENED,
+               :HV_ACCOUNT_OVERDRAFT_LIM,
+               :HV_ACCOUNT_LAST_STMT,
+               :HV_ACCOUNT_NEXT_STMT,
+               :HV_ACCOUNT_AVAIL_BAL,
+               :HV_ACCOUNT_ACTUAL_BAL
+         FROM ACCOUNT
+         WHERE (ACCOUNT_SORTCODE = :HV_ACCOUNT_SORTCODE AND
+                ACCOUNT_NUMBER   = :HV_ACCOUNT_ACC_NO);
+
+      IF SQLCODE ^= 0 THEN
+      DO;
+         COMM_SUCCESS = 'N';
+         SQLCODE_DISPLAY = SQLCODE;
+         PUT SKIP LIST('ERROR: UPDACC returned ' || SQLCODE_DISPLAY
+                       || ' on SELECT');
+         RETURN;
+      END;
+
+      /* Reject blank account type */
+      IF COMM_ACC_TYPE = ' ' | SUBSTR(COMM_ACC_TYPE,1,1) = ' ' THEN
+      DO;
+         COMM_SUCCESS = 'N';
+         PUT SKIP LIST('ERROR: UPDACC has invalid account-type');
+         RETURN;
+      END;
+
+      HV_ACCOUNT_ACC_TYPE     = COMM_ACC_TYPE;
+      HV_ACCOUNT_OVERDRAFT_LIM = COMM_OVERDRAFT;
+      HV_ACCOUNT_INT_RATE      = COMM_INT_RATE;
+
+      EXEC SQL
+         UPDATE ACCOUNT
+         SET ACCOUNT_TYPE             = :HV_ACCOUNT_ACC_TYPE,
+             ACCOUNT_INTEREST_RATE    = :HV_ACCOUNT_INT_RATE,
+             ACCOUNT_OVERDRAFT_LIMIT  = :HV_ACCOUNT_OVERDRAFT_LIM
+         WHERE (ACCOUNT_SORTCODE = :HV_ACCOUNT_SORTCODE AND
+                ACCOUNT_NUMBER   = :HV_ACCOUNT_ACC_NO);
+
+      IF SQLCODE ^= 0 THEN
+      DO;
+         COMM_SUCCESS = 'N';
+         SQLCODE_DISPLAY = SQLCODE;
+         PUT SKIP LIST('ERROR: UPDACC returned ' || SQLCODE_DISPLAY
+                       || ' on UPDATE');
+         RETURN;
+      END;
+
+      /* Set output COMMAREA from DB2 row */
+      COMM_EYE      = HV_ACCOUNT_EYECATCHER;
+      COMM_CUSTNO   = HV_ACCOUNT_CUST_NO;
+      COMM_SCODE    = HV_ACCOUNT_SORTCODE;
+      COMM_ACCNO    = HV_ACCOUNT_ACC_NO;
+      COMM_ACC_TYPE = HV_ACCOUNT_ACC_TYPE;
+      COMM_INT_RATE = HV_ACCOUNT_INT_RATE;
+
+      /* Reformat DB2 date YYYY-MM-DD → DDMMYYYY groups */
+      DB2_DATE_REFORMAT = HV_ACCOUNT_OPENED;
+      COMM_OPENED_YEAR  = DB2_DATE_REF_YR;
+      COMM_OPENED_MONTH = DB2_DATE_REF_MNTH;
+      COMM_OPENED_DAY   = DB2_DATE_REF_DAY;
+
+      COMM_OVERDRAFT    = HV_ACCOUNT_OVERDRAFT_LIM;
+
+      DB2_DATE_REFORMAT  = HV_ACCOUNT_LAST_STMT;
+      COMM_LASTST_YEAR   = DB2_DATE_REF_YR;
+      COMM_LASTST_MONTH  = DB2_DATE_REF_MNTH;
+      COMM_LASTST_DAY    = DB2_DATE_REF_DAY;
+
+      DB2_DATE_REFORMAT  = HV_ACCOUNT_NEXT_STMT;
+      COMM_NEXTST_YEAR   = DB2_DATE_REF_YR;
+      COMM_NEXTST_MONTH  = DB2_DATE_REF_MNTH;
+      COMM_NEXTST_DAY    = DB2_DATE_REF_DAY;
+
+      COMM_AVAIL_BAL    = HV_ACCOUNT_AVAIL_BAL;
+      COMM_ACTUAL_BAL   = HV_ACCOUNT_ACTUAL_BAL;
+      COMM_SUCCESS      = 'Y';
+
+   END UPDATE_ACCOUNT_DB2;
+
+   /* *************************************************************** */
+   /* GET_ME_OUT_OF_HERE                                             */
+   /* *************************************************************** */
+   GET_ME_OUT_OF_HERE: PROC;
+      EXEC CICS RETURN;
+   END GET_ME_OUT_OF_HERE;
+
+END UPDACC;

@@ -1,0 +1,22 @@
+*PROCESS SYSTEM(CICS) MARGINS(1,72);
+ /* **************************************************************** */
+ /*                                                                */
+ /*  Copyright IBM Corp. 2023                                      */
+ /*                                                                */
+ /* **************************************************************** */
+ /* GETCOMPY - Returns the company name in the COMMAREA.           */
+ /* Converted from GETCOMPY.cbl                                    */
+ /* **************************************************************** */
+GETCOMPY: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
+
+   DCL COMM_AREA_PTR POINTER;
+
+   /* DFHCOMMAREA - from GETCOMPY.cpy */
+   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR),
+   %INCLUDE GETCOMPY;
+
+   COMPANY_NAME = 'CICS Bank Sample Application';
+
+   EXEC CICS RETURN;
+
+END GETCOMPY;

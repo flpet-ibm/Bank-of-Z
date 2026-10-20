@@ -1,0 +1,304 @@
+*PROCESS SYSTEM(CICS) SQL MARGINS(1,72);
+ /* **************************************************************** */
+ /*                                                                */
+ /*  Copyright IBM Corp. 2023                                      */
+ /*                                                                */
+ /* **************************************************************** */
+ /* UPDCUST - Update Customer record in DB2.                        */
+ /* Allows updating name, address, phone, status, DOB.             */
+ /* Converted from UPDCUST.cbl                                      */
+ /* **************************************************************** */
+UPDCUST: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
+
+   DCL COMM_AREA_PTR POINTER;
+
+   /* *************************************************************** */
+   /* DFHCOMMAREA - UPDCUST COMMAREA                                 */
+   /* *************************************************************** */
+   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR),
+   %INCLUDE UPDCUST;
+
+   /* *************************************************************** */
+   /* Sort code constant                                              */
+   /* *************************************************************** */
+   DCL SORTCODE CHAR(6) INIT('987654');
+
+   /* *************************************************************** */
+   /* DB2 table declarations                                         */
+   /* *************************************************************** */
+   EXEC SQL INCLUDE CUSTDB2;
+
+   /* *************************************************************** */
+   /* CUSTOMER host variables for DB2                                */
+   /* *************************************************************** */
+   DCL 1 HOST_CUSTOMER_ROW,
+     3 HV_CUSTOMER_EYECATCHER      CHAR(4),
+     3 HV_CUSTOMER_SORTCODE        CHAR(6),
+     3 HV_CUSTOMER_NUMBER          CHAR(10),
+     3 HV_CUSTOMER_TITLE           CHAR(10),
+     3 HV_CUSTOMER_FIRST_NAME      CHAR(50),
+     3 HV_CUSTOMER_LAST_NAME       CHAR(50),
+     3 HV_CUSTOMER_DOB             FIXED BIN(31),
+     3 HV_CUSTOMER_PHONE           CHAR(20),
+     3 HV_CUSTOMER_ADDR_LINE1      CHAR(50),
+     3 HV_CUSTOMER_ADDR_LINE2      CHAR(50),
+     3 HV_CUSTOMER_CITY            CHAR(50),
+     3 HV_CUSTOMER_POSTCODE        CHAR(10),
+     3 HV_CUSTOMER_COUNTRY         CHAR(50),
+     3 HV_CUSTOMER_STATUS          CHAR(10),
+     3 HV_CUSTOMER_CREATE_DATE     FIXED BIN(31),
+     3 HV_CUSTOMER_CREDIT_SCORE    FIXED BIN(15),
+     3 HV_CUSTOMER_CS_REVIEW_DATE  FIXED BIN(31);
+
+   /* *************************************************************** */
+   /* SQL Communication Area                                         */
+   /* *************************************************************** */
+   DCL 1 SQLCA,
+     3 SQLCAID     CHAR(8)          INIT('SQLCA   '),
+     3 SQLCABC     FIXED BIN(31)    INIT(136),
+     3 SQLCODE     FIXED BIN(31)    INIT(0),
+     3 SQLERRM,
+       5 SQLERRML  FIXED BIN(15)    INIT(0),
+       5 SQLERRMC  CHAR(70)         INIT(' '),
+     3 SQLERRP     CHAR(8)          INIT(' '),
+     3 SQLERRD    (6) FIXED BIN(31) INIT(0),
+     3 SQLWARN,
+       5 SQLWARN0  CHAR(1)          INIT(' '),
+       5 SQLWARN1  CHAR(1)          INIT(' '),
+       5 SQLWARN2  CHAR(1)          INIT(' '),
+       5 SQLWARN3  CHAR(1)          INIT(' '),
+       5 SQLWARN4  CHAR(1)          INIT(' '),
+       5 SQLWARN5  CHAR(1)          INIT(' '),
+       5 SQLWARN6  CHAR(1)          INIT(' '),
+       5 SQLWARN7  CHAR(1)          INIT(' '),
+     3 SQLSTATE    CHAR(5)          INIT(' ');
+
+   /* *************************************************************** */
+   /* Working variables                                              */
+   /* *************************************************************** */
+   DCL WS_CICS_RESP             FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2            FIXED BIN(31) INIT(0);
+   DCL SQLCODE_DISPLAY          CHAR(9)       INIT(' ');
+   DCL WS_UNSTR_TITLE           CHAR(9)       INIT(' ');
+   DCL WS_TITLE_VALID           CHAR(1)       INIT(' ');
+
+   DCL 1 DESIRED_CUST_KEY,
+     3 DESIRED_SORT_CODE         CHAR(6) INIT('000000'),
+     3 DESIRED_CUSTNO            CHAR(10) INIT('0000000000');
+
+   /* *************************************************************** */
+   /* PREMIERE SECTION                                               */
+   /* *************************************************************** */
+   DESIRED_SORT_CODE = COMM_SCODE;
+
+   /* Validate title */
+   WS_UNSTR_TITLE = COMM_TITLE;
+   WS_TITLE_VALID = ' ';
+
+   SELECT;
+      WHEN (WS_UNSTR_TITLE = 'Professor' |
+            WS_UNSTR_TITLE = 'Mr       ' |
+            WS_UNSTR_TITLE = 'Mrs      ' |
+            WS_UNSTR_TITLE = 'Miss     ' |
+            WS_UNSTR_TITLE = 'Ms       ' |
+            WS_UNSTR_TITLE = 'Dr       ' |
+            WS_UNSTR_TITLE = 'Drs      ' |
+            WS_UNSTR_TITLE = 'Lord     ' |
+            WS_UNSTR_TITLE = 'Sir      ' |
+            WS_UNSTR_TITLE = 'Lady     ' |
+            WS_UNSTR_TITLE = '         ')
+         WS_TITLE_VALID = 'Y';
+      OTHERWISE
+         WS_TITLE_VALID = 'N';
+   END;
+
+   IF WS_TITLE_VALID = 'N' THEN
+   DO;
+      COMM_UPD_SUCCESS = 'N';
+      COMM_UPD_FAIL_CD = 'T';
+      EXEC CICS RETURN;
+   END;
+
+   CALL UPDATE_CUSTOMER_DB2;
+
+   CALL GET_ME_OUT_OF_HERE;
+
+   /* *************************************************************** */
+   /* UPDATE_CUSTOMER_DB2                                            */
+   /* *************************************************************** */
+   UPDATE_CUSTOMER_DB2: PROC;
+      DESIRED_SORT_CODE = COMM_SCODE;
+      DESIRED_CUSTNO    = COMM_CUSTNO;
+
+      /* Reject if name AND address are blank */
+      IF (COMM_FIRST_NAME = ' ' | SUBSTR(COMM_FIRST_NAME,1,1) = ' ') &
+         (COMM_LAST_NAME  = ' ' | SUBSTR(COMM_LAST_NAME,1,1)  = ' ') &
+         (COMM_ADDR_LINE1 = ' ' | SUBSTR(COMM_ADDR_LINE1,1,1) = ' ')
+      THEN
+      DO;
+         COMM_UPD_SUCCESS = 'N';
+         COMM_UPD_FAIL_CD = '4';
+         RETURN;
+      END;
+
+      /* Set DB2 key */
+      IF COMM_SCODE = ' ' THEN
+         HV_CUSTOMER_SORTCODE = SORTCODE;
+      ELSE
+         HV_CUSTOMER_SORTCODE = COMM_SCODE;
+
+      HV_CUSTOMER_NUMBER = COMM_CUSTNO;
+
+      /* SELECT current record */
+      EXEC SQL
+         SELECT CUSTOMER_EYECATCHER,
+                CUSTOMER_SORTCODE,
+                CUSTOMER_NUMBER,
+                CUSTOMER_TITLE,
+                CUSTOMER_FIRST_NAME,
+                CUSTOMER_LAST_NAME,
+                CUSTOMER_DATE_OF_BIRTH,
+                CUSTOMER_PHONE,
+                CUSTOMER_ADDR_LINE1,
+                CUSTOMER_ADDR_LINE2,
+                CUSTOMER_CITY,
+                CUSTOMER_POSTCODE,
+                CUSTOMER_COUNTRY,
+                CUSTOMER_STATUS,
+                CUSTOMER_CREATED_DATE,
+                CUSTOMER_CREDIT_SCORE,
+                CUSTOMER_CS_REVIEW_DATE
+           INTO :HV_CUSTOMER_EYECATCHER,
+                :HV_CUSTOMER_SORTCODE,
+                :HV_CUSTOMER_NUMBER,
+                :HV_CUSTOMER_TITLE,
+                :HV_CUSTOMER_FIRST_NAME,
+                :HV_CUSTOMER_LAST_NAME,
+                :HV_CUSTOMER_DOB,
+                :HV_CUSTOMER_PHONE,
+                :HV_CUSTOMER_ADDR_LINE1,
+                :HV_CUSTOMER_ADDR_LINE2,
+                :HV_CUSTOMER_CITY,
+                :HV_CUSTOMER_POSTCODE,
+                :HV_CUSTOMER_COUNTRY,
+                :HV_CUSTOMER_STATUS,
+                :HV_CUSTOMER_CREATE_DATE,
+                :HV_CUSTOMER_CREDIT_SCORE,
+                :HV_CUSTOMER_CS_REVIEW_DATE
+           FROM CUSTOMER
+          WHERE CUSTOMER_SORTCODE = :HV_CUSTOMER_SORTCODE
+            AND CUSTOMER_NUMBER   = :HV_CUSTOMER_NUMBER;
+
+      IF SQLCODE = 100 THEN
+      DO;
+         COMM_UPD_SUCCESS = 'N';
+         COMM_UPD_FAIL_CD = '1';
+         RETURN;
+      END;
+
+      IF SQLCODE ^= 0 THEN
+      DO;
+         SQLCODE_DISPLAY  = SQLCODE;
+         COMM_UPD_SUCCESS = 'N';
+         COMM_UPD_FAIL_CD = '2';
+         PUT SKIP LIST('UPDCUST - SELECT CUSTOMER failed. SQLCODE='
+                       || SQLCODE_DISPLAY);
+         RETURN;
+      END;
+
+      /* Apply supplied field updates */
+      IF SUBSTR(COMM_FIRST_NAME,1,1) ^= ' ' THEN
+      DO;
+         HV_CUSTOMER_TITLE      = COMM_TITLE;
+         HV_CUSTOMER_FIRST_NAME = COMM_FIRST_NAME;
+         HV_CUSTOMER_LAST_NAME  = COMM_LAST_NAME;
+      END;
+
+      IF SUBSTR(COMM_PHONE,1,1) ^= ' ' THEN
+         HV_CUSTOMER_PHONE = COMM_PHONE;
+
+      IF SUBSTR(COMM_ADDR_LINE1,1,1) ^= ' ' THEN
+      DO;
+         HV_CUSTOMER_ADDR_LINE1 = COMM_ADDR_LINE1;
+         HV_CUSTOMER_ADDR_LINE2 = COMM_ADDR_LINE2;
+         HV_CUSTOMER_CITY       = COMM_CITY;
+         HV_CUSTOMER_POSTCODE   = COMM_POSTCODE;
+         HV_CUSTOMER_COUNTRY    = COMM_COUNTRY;
+      END;
+
+      IF SUBSTR(COMM_STATUS,1,1) ^= ' ' THEN
+         HV_CUSTOMER_STATUS = COMM_STATUS;
+
+      IF COMM_DOB_YEAR ^= '0000' THEN
+         HV_CUSTOMER_DOB = COMM_DOB_YEAR * 10000 +
+                           COMM_DOB_MONTH * 100  +
+                           COMM_DOB_DAY;
+
+      /* UPDATE record */
+      EXEC SQL
+         UPDATE CUSTOMER
+            SET CUSTOMER_TITLE          = :HV_CUSTOMER_TITLE,
+                CUSTOMER_FIRST_NAME     = :HV_CUSTOMER_FIRST_NAME,
+                CUSTOMER_LAST_NAME      = :HV_CUSTOMER_LAST_NAME,
+                CUSTOMER_DATE_OF_BIRTH  = :HV_CUSTOMER_DOB,
+                CUSTOMER_PHONE          = :HV_CUSTOMER_PHONE,
+                CUSTOMER_ADDR_LINE1     = :HV_CUSTOMER_ADDR_LINE1,
+                CUSTOMER_ADDR_LINE2     = :HV_CUSTOMER_ADDR_LINE2,
+                CUSTOMER_CITY           = :HV_CUSTOMER_CITY,
+                CUSTOMER_POSTCODE       = :HV_CUSTOMER_POSTCODE,
+                CUSTOMER_COUNTRY        = :HV_CUSTOMER_COUNTRY,
+                CUSTOMER_STATUS         = :HV_CUSTOMER_STATUS
+          WHERE CUSTOMER_SORTCODE = :HV_CUSTOMER_SORTCODE
+            AND CUSTOMER_NUMBER   = :HV_CUSTOMER_NUMBER;
+
+      IF SQLCODE ^= 0 THEN
+      DO;
+         SQLCODE_DISPLAY  = SQLCODE;
+         COMM_UPD_SUCCESS = 'N';
+         COMM_UPD_FAIL_CD = '3';
+         PUT SKIP LIST('UPDCUST - UPDATE CUSTOMER failed. SQLCODE='
+                       || SQLCODE_DISPLAY);
+         RETURN;
+      END;
+
+      /* Return updated values */
+      COMM_EYE        = HV_CUSTOMER_EYECATCHER;
+      COMM_SCODE      = HV_CUSTOMER_SORTCODE;
+      COMM_CUSTNO     = HV_CUSTOMER_NUMBER;
+      COMM_TITLE      = HV_CUSTOMER_TITLE;
+      COMM_FIRST_NAME = HV_CUSTOMER_FIRST_NAME;
+      COMM_LAST_NAME  = HV_CUSTOMER_LAST_NAME;
+      COMM_PHONE      = HV_CUSTOMER_PHONE;
+      COMM_ADDR_LINE1 = HV_CUSTOMER_ADDR_LINE1;
+      COMM_ADDR_LINE2 = HV_CUSTOMER_ADDR_LINE2;
+      COMM_CITY       = HV_CUSTOMER_CITY;
+      COMM_POSTCODE   = HV_CUSTOMER_POSTCODE;
+      COMM_COUNTRY    = HV_CUSTOMER_COUNTRY;
+      COMM_STATUS     = HV_CUSTOMER_STATUS;
+
+      COMM_CREATED_YEAR  = SUBSTR(HV_CUSTOMER_CREATE_DATE / 10000, 1, 4);
+      COMM_CREATED_MONTH = SUBSTR(
+                              MOD(HV_CUSTOMER_CREATE_DATE / 100, 100),
+                              1, 2);
+      COMM_CREATED_DAY   = SUBSTR(
+                              MOD(HV_CUSTOMER_CREATE_DATE, 100), 1, 2);
+
+      COMM_DOB_YEAR   = SUBSTR(HV_CUSTOMER_DOB / 10000, 1, 4);
+      COMM_DOB_MONTH  = SUBSTR(MOD(HV_CUSTOMER_DOB / 100, 100), 1, 2);
+      COMM_DOB_DAY    = SUBSTR(MOD(HV_CUSTOMER_DOB, 100), 1, 2);
+
+      COMM_CREDIT_SCORE    = HV_CUSTOMER_CREDIT_SCORE;
+      COMM_CS_REVIEW_DATE  = HV_CUSTOMER_CS_REVIEW_DATE;
+
+      COMM_UPD_SUCCESS = 'Y';
+
+   END UPDATE_CUSTOMER_DB2;
+
+   /* *************************************************************** */
+   /* GET_ME_OUT_OF_HERE                                             */
+   /* *************************************************************** */
+   GET_ME_OUT_OF_HERE: PROC;
+      EXEC CICS RETURN;
+   END GET_ME_OUT_OF_HERE;
+
+END UPDCUST;

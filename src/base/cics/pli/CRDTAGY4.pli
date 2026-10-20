@@ -1,0 +1,143 @@
+*PROCESS SYSTEM(CICS) MARGINS(1,72);
+ /***************************************************************** */
+ /*                                                                */
+ /*  Copyright IBM Corp. 2023                                      */
+ /*                                                                */
+ /***************************************************************** */
+ /***************************************************************** */
+ /* CRDTAGY4 - Dummy Credit Agency 4 (CIPD container)             */
+ /* Delays a random 1-3 seconds, generates a credit score (1-999) */
+ /* via CICS channel/container async API, then returns.           */
+ /***************************************************************** */
+ CRDTAGY4: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
+
+   DCL COMM_AREA_PTR POINTER;
+   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR),
+     3 DFHCOMMAREA_DATA CHAR(1);
+
+   DCL SORTCODE CHAR(6) INIT('987654');
+
+   DCL 1 WS_CONT_IN,
+   %INCLUDE CUSTOMER;
+
+   DCL WS_CICS_RESP  FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2 FIXED BIN(31) INIT(0);
+
+   DCL WS_DELAY_AMT       FIXED BIN(31) INIT(0);
+   DCL WS_CONTAINER_NAME  CHAR(16) INIT(' ');
+   DCL WS_CHANNEL_NAME    CHAR(16) INIT(' ');
+   DCL WS_CONTAINER_LEN   FIXED BIN(31) INIT(0);
+   DCL WS_NEW_CREDSCORE   FIXED BIN(15) INIT(0);
+   DCL WS_SEED            FIXED BIN(63) INIT(0);
+
+   DCL WS_U_TIME          FIXED BIN(63) INIT(0);
+   DCL WS_ORIG_DATE       CHAR(10) INIT(' ');
+   DCL 1 WS_ORIG_DATE_GRP DEFINED(WS_ORIG_DATE),
+     3 WS_ORIG_DATE_DD    CHAR(2),
+     3 WS_ORIG_DATE_SEP1  CHAR(1),
+     3 WS_ORIG_DATE_MM    CHAR(2),
+     3 WS_ORIG_DATE_SEP2  CHAR(1),
+     3 WS_ORIG_DATE_YYYY  CHAR(4);
+
+   DCL 1 WS_TIME_DATA,
+     3 WS_TIME_NOW        CHAR(6),
+     3 * DEFINED(WS_TIME_NOW),
+       5 WS_TIME_NOW_HH   CHAR(2),
+       5 WS_TIME_NOW_MM   CHAR(2),
+       5 WS_TIME_NOW_SS   CHAR(2);
+
+   DCL WS_ABEND_PGM CHAR(8) INIT('ABNDPROC');
+
+   DCL 1 ABNDINFO_REC,
+   %INCLUDE ABNDINFO;
+
+   /*****************************************************************/
+   /* MAIN PROCEDURE                                                */
+   /*****************************************************************/
+   WS_CONTAINER_NAME = 'CIPD            ';
+   WS_CHANNEL_NAME   = 'CIPCREDCHANN    ';
+   WS_SEED           = EIBTASKN;
+
+   WS_DELAY_AMT = TRUNC(((3 - 1) * RANDOM(WS_SEED)) + 1);
+
+   EXEC CICS DELAY
+        FOR SECONDS(WS_DELAY_AMT)
+        RESP(WS_CICS_RESP)
+        RESP2(WS_CICS_RESP2);
+
+   IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+     ABND_RESPCODE = EIBRESP;
+     ABND_RESP2CODE = EIBRESP2;
+     EXEC CICS ASSIGN APPLID(ABND_APPLID);
+     ABND_TASKNO_KEY = EIBTASKN;
+     ABND_TRANID     = EIBTRNID;
+     CALL POPULATE_TIME_DATE;
+     ABND_DATE = WS_ORIG_DATE;
+     ABND_TIME = WS_TIME_NOW_HH || ':' ||
+                 WS_TIME_NOW_MM || ':' || WS_TIME_NOW_SS;
+     ABND_UTIME_KEY = WS_U_TIME;
+     ABND_CODE = 'PLOP';
+     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM);
+     ABND_SQLCODE = '0';
+     ABND_FREEFORM =
+       'A010 - *** The delay messed up! *** EIBRESP=' ||
+       CHAR(EIBRESP) || ' RESP2=' || CHAR(EIBRESP2);
+     EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
+               COMMAREA(ABNDINFO_REC);
+     PUT SKIP LIST('*** The delay messed up ! ***');
+     EXEC CICS ABEND ABCODE('PLOP');
+   END;
+
+   WS_CONTAINER_LEN = LENGTH(WS_CONT_IN);
+
+   EXEC CICS GET CONTAINER(WS_CONTAINER_NAME)
+             CHANNEL(WS_CHANNEL_NAME)
+             INTO(WS_CONT_IN)
+             FLENGTH(WS_CONTAINER_LEN)
+             RESP(WS_CICS_RESP)
+             RESP2(WS_CICS_RESP2);
+
+   IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+     PUT SKIP LIST('CRDTAGY4 - UNABLE TO GET CONTAINER. RESP=' ||
+       CHAR(WS_CICS_RESP) || ', RESP2=' || CHAR(WS_CICS_RESP2));
+     PUT SKIP LIST('CONTAINER=' || WS_CONTAINER_NAME ||
+       ' CHANNEL=' || WS_CHANNEL_NAME);
+     CALL GET_ME_OUT_OF_HERE;
+   END;
+
+   WS_NEW_CREDSCORE = TRUNC(((999 - 1) * RANDOM()) + 1);
+   CUSTOMER_CREDIT_SCORE = WS_NEW_CREDSCORE;
+
+   WS_CONTAINER_LEN = LENGTH(WS_CONT_IN);
+
+   EXEC CICS PUT CONTAINER(WS_CONTAINER_NAME)
+             FROM(WS_CONT_IN)
+             FLENGTH(WS_CONTAINER_LEN)
+             CHANNEL(WS_CHANNEL_NAME)
+             RESP(WS_CICS_RESP)
+             RESP2(WS_CICS_RESP2);
+
+   IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
+     PUT SKIP LIST('CRDTAGY4 - UNABLE TO PUT CONTAINER. RESP=' ||
+       CHAR(WS_CICS_RESP) || ', RESP2=' || CHAR(WS_CICS_RESP2));
+     PUT SKIP LIST('CONTAINER=' || WS_CONTAINER_NAME ||
+       ' CHANNEL=' || WS_CHANNEL_NAME);
+     CALL GET_ME_OUT_OF_HERE;
+   END;
+
+   CALL GET_ME_OUT_OF_HERE;
+
+   GET_ME_OUT_OF_HERE: PROC;
+     EXEC CICS RETURN;
+   END GET_ME_OUT_OF_HERE;
+
+   POPULATE_TIME_DATE: PROC;
+     EXEC CICS ASKTIME ABSTIME(WS_U_TIME);
+     EXEC CICS FORMATTIME
+               ABSTIME(WS_U_TIME)
+               DDMMYYYY(WS_ORIG_DATE)
+               TIME(WS_TIME_NOW)
+               DATESEP;
+   END POPULATE_TIME_DATE;
+
+ END CRDTAGY4;

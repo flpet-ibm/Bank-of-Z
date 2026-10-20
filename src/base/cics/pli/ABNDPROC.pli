@@ -1,0 +1,72 @@
+*PROCESS SYSTEM(CICS) MARGINS(1,72);
+ /* **************************************************************** */
+ /*                                                                */
+ /*  Copyright IBM Corp. 2023                                      */
+ /*                                                                */
+ /* **************************************************************** */
+ /* ABNDPROC - Abend processor: writes abend record to ABNDFILE    */
+ /* KSDS. Receives COMMAREA with date/time/code/program/SQLCODE.   */
+ /* Converted from ABNDPROC.cbl                                    */
+ /* **************************************************************** */
+ABNDPROC: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
+
+   DCL COMM_AREA_PTR POINTER;
+
+   /* *************************************************************** */
+   /* DFHCOMMAREA - matches ABNDINFO layout exactly                  */
+   /* *************************************************************** */
+   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR),
+     3 COMM_VSAM_KEY,
+       5 COMM_UTIME_KEY         FIXED DEC(15,0),
+       5 COMM_TASKNO_KEY        CHAR(4),
+     3 COMM_APPLID              CHAR(8),
+     3 COMM_TRANID              CHAR(4),
+     3 COMM_DATE                CHAR(10),
+     3 COMM_TIME                CHAR(8),
+     3 COMM_CODE                CHAR(4),
+     3 COMM_PROGRAM             CHAR(8),
+     3 COMM_RESPCODE            CHAR(9),
+     3 COMM_RESP2CODE           CHAR(9),
+     3 COMM_SQLCODE             CHAR(9),
+     3 COMM_FREEFORM            CHAR(600);
+
+   /* *************************************************************** */
+   /* Working storage                                                 */
+   /* *************************************************************** */
+   DCL WS_CICS_RESP             FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2            FIXED BIN(31) INIT(0);
+
+   DCL 1 WS_ABND_AREA,
+   %INCLUDE ABNDINFO;
+
+   /* *************************************************************** */
+   /* PREMIERE SECTION                                                */
+   /* *************************************************************** */
+   WS_ABND_AREA = DFHCOMMAREA;
+
+   EXEC CICS WRITE
+      FILE('ABNDFILE')
+      FROM(WS_ABND_AREA)
+      RIDFLD(ABND_VSAM_KEY)
+      RESP(WS_CICS_RESP)
+      RESP2(WS_CICS_RESP2);
+
+   IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+   DO;
+      PUT SKIP LIST('*********************************************');
+      PUT SKIP LIST('**** Unable to write to the file ABNDFILE !!!');
+      PUT SKIP LIST('RESP=' || WS_CICS_RESP || ' RESP2=' || WS_CICS_RESP2);
+      PUT SKIP LIST('*********************************************');
+      EXEC CICS RETURN;
+   END;
+
+   CALL GET_ME_OUT_OF_HERE;
+
+   /* *************************************************************** */
+   /* GET_ME_OUT_OF_HERE                                              */
+   /* *************************************************************** */
+   GET_ME_OUT_OF_HERE: PROC;
+      EXEC CICS RETURN;
+   END GET_ME_OUT_OF_HERE;
+
+END ABNDPROC;
