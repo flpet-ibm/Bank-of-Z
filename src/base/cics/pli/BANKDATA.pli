@@ -128,8 +128,8 @@
    /*****************************************************************/
    /* CUSTOMER working area                                         */
    /*****************************************************************/
-   DCL 1 WS_CUSTOMER_RECORD,
-   %INCLUDE CUSTOMER;
+   /* DCL 1 WS_CUSTOMER_RECORD,
+   %INCLUDE CUSTOMER; */
 
    /*****************************************************************/
    /* CUSTOMER CONTROL area                                         */
