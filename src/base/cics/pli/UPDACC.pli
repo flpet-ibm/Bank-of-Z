@@ -1,4 +1,3 @@
-*PROCESS SYSTEM(CICS) SQL MARGINS(1,72);
  /* **************************************************************** */
  /*                                                                */
  /*  Copyright IBM Corp. 2023                                      */
@@ -8,7 +7,7 @@
  /* limit) in DB2. Balance updates are NOT permitted here.         */
  /* Converted from UPDACC.cbl                                      */
  /* **************************************************************** */
-UPDACC: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
+ UPDACC: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
 
    DCL COMM_AREA_PTR POINTER;
 
@@ -212,4 +211,4 @@ UPDACC: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
       EXEC CICS RETURN;
    END GET_ME_OUT_OF_HERE;
 
-END UPDACC;
+ END UPDACC;

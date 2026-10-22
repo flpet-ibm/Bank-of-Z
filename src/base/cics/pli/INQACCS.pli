@@ -1,4 +1,3 @@
-*PROCESS SYSTEM(CICS) SQL MARGINS(1,72);
  /* **************************************************************** */
  /*                                                                */
  /*  Copyright IBM Corp. 2023                                      */
@@ -8,7 +7,7 @@
  /* Uses a DB2 cursor. Returns accounts in the COMMAREA array.     */
  /* Converted from INQACCS.cbl                                     */
  /* **************************************************************** */
-INQACCS: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
+ INQACCS: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
 
    DCL COMM_AREA_PTR POINTER;
 
@@ -263,4 +262,4 @@ INQACCS: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
 
    END CHECK_FOR_STORM_DRAIN_DB2;
 
-END INQACCS;
+ END INQACCS;
