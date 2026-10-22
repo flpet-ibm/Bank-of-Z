@@ -136,9 +136,9 @@
      3 WS_ORIG_DATE_SEP2_X CHAR(1) INIT('.'),
      3 WS_ORIG_DATE_YYYY_X CHAR(4) INIT(' ');
 
-   DCL 1 WS_TIME_DATA,
+   DCL 1 WS_TIME_DATA union,
      3 WS_TIME_NOW CHAR(6) INIT(' '),
-     3 * DEFINED(WS_TIME_NOW),
+     3 *,
        5 WS_TIME_NOW_HH CHAR(2),
        5 WS_TIME_NOW_MM CHAR(2),
        5 WS_TIME_NOW_SS CHAR(2);
