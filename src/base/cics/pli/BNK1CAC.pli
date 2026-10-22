@@ -31,7 +31,7 @@
    /*****************************************************************/
    /* AID key definitions                                           */
    /*****************************************************************/
-
+   %INCLUDE DFHAID;
    /*****************************************************************/
    /* Working storage                                               */
    /*****************************************************************/
@@ -42,9 +42,9 @@
      3 WS_FAIL_PROG        CHAR(9)  INIT('BNK1CAC  '),
      3 WS_CICS_FAIL_MSG    CHAR(70) INIT(' '),
      3 WS_FAIL_RESP_LBL    CHAR(6)  INIT(' RESP='),
-     3 WS_CICS_RESP_DISP   CHAR(10) INIT(' '),
+     3 WS_CICS_RESP_DISP   PIC 'Z(9)9' INIT(0),
      3 WS_FAIL_RESP2_LBL   CHAR(7)  INIT(' RESP2='),
-     3 WS_CICS_RESP2_DISP  CHAR(10) INIT(' '),
+     3 WS_CICS_RESP2_DISP  PIC 'Z(9)9' INIT(0),
      3 WS_FAIL_ABEND_MSG   CHAR(15)
                            INIT(' ABENDING TASK.');
 
