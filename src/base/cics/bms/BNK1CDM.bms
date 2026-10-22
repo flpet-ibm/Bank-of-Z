@@ -18,7 +18,7 @@
 *
 *
 ***************************************************************
-BNK1CDM  DFHMSD TYPE=&SYSPARM,MODE=INOUT,LANG=COBOL,STORAGE=AUTO,      *
+BNK1CDM  DFHMSD TYPE=&SYSPARM,MODE=INOUT,LANG=PLI,STORAGE=AUTO,        *
                CTRL=FREEKB,EXTATT=YES,TERM=3270-2,TIOAPFX=YES,         *
                MAPATTS=(COLOR,HILIGHT,OUTLINE,PS,SOSI),                *
                DSATTS=(COLOR,HILIGHT,OUTLINE,PS,SOSI)
