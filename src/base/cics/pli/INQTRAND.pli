@@ -16,8 +16,8 @@
    /*****************************************************************/
    /* DFHCOMMAREA (from INQTRAND.cpy)                               */
    /*****************************************************************/
-   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR),
    %INCLUDE INQTRAND;
+   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR) LIKE INQTRAND_TMPL;
 
    /*****************************************************************/
    /* Sort code constant                                            */
@@ -69,8 +69,8 @@
    /*****************************************************************/
    /* ABNDINFO record                                               */
    /*****************************************************************/
-   DCL 1 ABNDINFO_REC,
    %INCLUDE ABNDINFO;
+   DCL 1 ABNDINFO_REC LIKE ABNDINFO_TMPL;
 
    /*****************************************************************/
    /* TRAND DB2 cursor declaration                                  */
@@ -150,12 +150,12 @@
    EXEC CICS HANDLE ABEND LABEL(ABEND_HANDLING);
 
    /* Validate eyecatcher */
-   IF INQTRAND_EYE ^= 'ITRD' THEN
-     INQTRAND_EYE = 'ITRD';
+   IF DFHCOMMAREA.INQTRAND_EYE ^= 'ITRD' THEN
+     DFHCOMMAREA.INQTRAND_EYE = 'ITRD';
 
    /* Initialise output flags */
-   INQTRAND_SUCCESS = 'N';
-   INQTRAND_FOUND   = 'N';
+   DFHCOMMAREA.INQTRAND_SUCCESS = 'N';
+   DFHCOMMAREA.INQTRAND_FOUND   = 'N';
 
    /* Read transaction from DB2 */
    CALL READ_TRANSACTION_DB2;
@@ -169,22 +169,22 @@
    READ_TRANSACTION_DB2: PROC;
 
      /* Populate host variables from commarea input */
-     HV_PROCTRAN_SORTCODE = INQTRAND_SORTCODE;
-     HV_PROCTRAN_NUMBER   = INQTRAND_ACCNO;
+     HV_PROCTRAN_SORTCODE = DFHCOMMAREA.INQTRAND_SORTCODE;
+     HV_PROCTRAN_NUMBER   = DFHCOMMAREA.INQTRAND_ACCNO;
 
      /* Convert YYYYMMDD input to YYYY-MM-DD for DB2 */
-     WS_DATE_YYYYMMDD   = INQTRAND_DATE;
+     WS_DATE_YYYYMMDD   = DFHCOMMAREA.INQTRAND_DATE;
      CALL CONVERT_YYYYMMDD_TO_ISO;
      HV_PROCTRAN_DATE   = WS_DATE_ISO;
 
-     HV_PROCTRAN_TIME   = INQTRAND_TIME;
-     HV_PROCTRAN_REF    = INQTRAND_REF;
+     HV_PROCTRAN_TIME   = DFHCOMMAREA.INQTRAND_TIME;
+     HV_PROCTRAN_REF    = DFHCOMMAREA.INQTRAND_REF;
 
      /* Open cursor */
      EXEC SQL OPEN TRAND_CURSOR;
 
      IF SQLCODE ^= 0 THEN DO;
-       ABND_SQLCODE = CHAR(SQLCODE);
+       ABNDINFO_REC.ABND_SQLCODE = CHAR(SQLCODE);
        CALL ABEND_ROUTINE;
      END;
 
@@ -202,7 +202,7 @@
 
      IF SQLCODE = 0 THEN DO;
        /* Transaction found - populate output */
-       INQTRAND_FOUND = 'Y';
+       DFHCOMMAREA.INQTRAND_FOUND = 'Y';
 
        /* Convert DATE from YYYY-MM-DD back to YYYYMMDD */
        WS_DATE_ISO = HV_PROCTRAN_DATE;
@@ -215,29 +215,29 @@
        WS_TRAN_ID_TIME = HV_PROCTRAN_TIME;
        WS_TRAN_ID_REF  = HV_PROCTRAN_REF;
 
-       INQTRAND_TRAN_ID      = WS_TRAN_ID_SC || '-' ||
+       DFHCOMMAREA.INQTRAND_TRAN_ID      = WS_TRAN_ID_SC || '-' ||
                                WS_TRAN_ID_NUM || '-' ||
                                WS_TRAN_ID_DATE || '-' ||
                                WS_TRAN_ID_TIME || '-' ||
                                WS_TRAN_ID_REF;
-       INQTRAND_TRAN_SORTCODE = HV_PROCTRAN_SORTCODE;
-       INQTRAND_TRAN_ACCNO    = HV_PROCTRAN_NUMBER;
-       INQTRAND_TRAN_DATE     = WS_DATE_YYYYMMDD;
-       INQTRAND_TRAN_TIME     = HV_PROCTRAN_TIME;
-       INQTRAND_TRAN_REF      = HV_PROCTRAN_REF;
-       INQTRAND_TRAN_TYPE     = HV_PROCTRAN_TYPE;
-       INQTRAND_TRAN_DESC     = HV_PROCTRAN_DESC;
-       INQTRAND_TRAN_AMOUNT   = HV_PROCTRAN_AMOUNT;
-       INQTRAND_SUCCESS       = 'Y';
+       DFHCOMMAREA.INQTRAND_TRAN_SORTCODE = HV_PROCTRAN_SORTCODE;
+       DFHCOMMAREA.INQTRAND_TRAN_ACCNO    = HV_PROCTRAN_NUMBER;
+       DFHCOMMAREA.INQTRAND_TRAN_DATE     = WS_DATE_YYYYMMDD;
+       DFHCOMMAREA.INQTRAND_TRAN_TIME     = HV_PROCTRAN_TIME;
+       DFHCOMMAREA.INQTRAND_TRAN_REF      = HV_PROCTRAN_REF;
+       DFHCOMMAREA.INQTRAND_TRAN_TYPE     = HV_PROCTRAN_TYPE;
+       DFHCOMMAREA.INQTRAND_TRAN_DESC     = HV_PROCTRAN_DESC;
+       DFHCOMMAREA.INQTRAND_TRAN_AMOUNT   = HV_PROCTRAN_AMOUNT;
+       DFHCOMMAREA.INQTRAND_SUCCESS       = 'Y';
      END;
      ELSE IF SQLCODE = 100 THEN DO;
        /* Not found - not an error */
-       INQTRAND_FOUND   = 'N';
-       INQTRAND_SUCCESS = 'Y';
+       DFHCOMMAREA.INQTRAND_FOUND   = 'N';
+       DFHCOMMAREA.INQTRAND_SUCCESS = 'Y';
      END;
      ELSE DO;
        /* SQL error */
-       ABND_SQLCODE = CHAR(SQLCODE);
+       ABNDINFO_REC.ABND_SQLCODE = CHAR(SQLCODE);
        CALL ABEND_ROUTINE;
      END;
 
@@ -245,7 +245,7 @@
      EXEC SQL CLOSE TRAND_CURSOR;
 
      IF SQLCODE ^= 0 THEN DO;
-       ABND_SQLCODE = CHAR(SQLCODE);
+       ABNDINFO_REC.ABND_SQLCODE = CHAR(SQLCODE);
        CALL ABEND_ROUTINE;
      END;
 
@@ -264,27 +264,27 @@
    ABEND_ROUTINE: PROC;
 
      ABNDINFO_REC = '';
-     ABND_RESPCODE  = CHAR(EIBRESP);
-     ABND_RESP2CODE = CHAR(EIBRESP2);
+     ABNDINFO_REC.ABND_RESPCODE  = CHAR(EIBRESP);
+     ABNDINFO_REC.ABND_RESP2CODE = CHAR(EIBRESP2);
 
-     EXEC CICS ASSIGN APPLID(ABND_APPLID);
+     EXEC CICS ASSIGN APPLID(ABNDINFO_REC.ABND_APPLID);
 
-     ABND_TASKNO_KEY = EIBTASKN;
-     ABND_TRANID     = EIBTRNID;
+     ABNDINFO_REC.ABND_TASKNO_KEY = EIBTASKN;
+     ABNDINFO_REC.ABND_TRANID     = EIBTRNID;
 
      CALL POPULATE_TIME_DATE;
 
-     ABND_DATE = WS_ORIG_DATE;
-     ABND_TIME = WS_TIME_NOW_GRP_HH || ':' ||
+     ABNDINFO_REC.ABND_DATE = WS_ORIG_DATE;
+     ABNDINFO_REC.ABND_TIME = WS_TIME_NOW_GRP_HH || ':' ||
                  WS_TIME_NOW_GRP_MM || ':' ||
                  WS_TIME_NOW_GRP_SS;
-     ABND_UTIME_KEY = WS_U_TIME;
-     ABND_CODE      = 'ITRD';
+     ABNDINFO_REC.ABND_UTIME_KEY = WS_U_TIME;
+     ABNDINFO_REC.ABND_CODE      = 'ITRD';
 
-     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM);
+     EXEC CICS ASSIGN PROGRAM(ABNDINFO_REC.ABND_PROGRAM);
 
-     ABND_FREEFORM = 'INQTRAND - DB2 Error. SQLCODE=' ||
-                     ABND_SQLCODE;
+     ABNDINFO_REC.ABND_FREEFORM = 'INQTRAND - DB2 Error. SQLCODE=' ||
+                     ABNDINFO_REC.ABND_SQLCODE;
 
      EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
                COMMAREA(ABNDINFO_REC);
@@ -301,26 +301,26 @@
    ABEND_HANDLING: PROC;
 
      ABNDINFO_REC = '';
-     ABND_RESPCODE  = CHAR(EIBRESP);
-     ABND_RESP2CODE = CHAR(EIBRESP2);
+     ABNDINFO_REC.ABND_RESPCODE  = CHAR(EIBRESP);
+     ABNDINFO_REC.ABND_RESP2CODE = CHAR(EIBRESP2);
 
-     EXEC CICS ASSIGN APPLID(ABND_APPLID);
+     EXEC CICS ASSIGN APPLID(ABNDINFO_REC.ABND_APPLID);
 
-     ABND_TASKNO_KEY = EIBTASKN;
-     ABND_TRANID     = EIBTRNID;
+     ABNDINFO_REC.ABND_TASKNO_KEY = EIBTASKN;
+     ABNDINFO_REC.ABND_TRANID     = EIBTRNID;
 
      CALL POPULATE_TIME_DATE;
 
-     ABND_DATE = WS_ORIG_DATE;
-     ABND_TIME = WS_TIME_NOW_GRP_HH || ':' ||
+     ABNDINFO_REC.ABND_DATE = WS_ORIG_DATE;
+     ABNDINFO_REC.ABND_TIME = WS_TIME_NOW_GRP_HH || ':' ||
                  WS_TIME_NOW_GRP_MM || ':' ||
                  WS_TIME_NOW_GRP_SS;
-     ABND_UTIME_KEY = WS_U_TIME;
-     ABND_CODE      = 'ITRD';
+     ABNDINFO_REC.ABND_UTIME_KEY = WS_U_TIME;
+     ABNDINFO_REC.ABND_CODE      = 'ITRD';
 
-     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM);
+     EXEC CICS ASSIGN PROGRAM(ABNDINFO_REC.ABND_PROGRAM);
 
-     ABND_FREEFORM = 'INQTRAND - Abend occurred';
+     ABNDINFO_REC.ABND_FREEFORM = 'INQTRAND - Abend occurred';
 
      EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
                COMMAREA(ABNDINFO_REC);

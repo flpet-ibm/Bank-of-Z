@@ -4,7 +4,9 @@
  /*                                                                */
  /* **************************************************************** */
  /* Converted from CRECUST.cpy - COMMAREA for Create Customer.     */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE CRECUST_TMPL;                           */
+  DCL 1 CRECUST_TMPL BASED,
    3 COMM_EYECATCHER              CHAR(4),
    3 COMM_KEY,
      5 COMM_SORTCODE               CHAR(6),

@@ -36,8 +36,8 @@ ABNDPROC: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
    DCL WS_CICS_RESP             FIXED BIN(31) INIT(0);
    DCL WS_CICS_RESP2            FIXED BIN(31) INIT(0);
 
-   DCL 1 WS_ABND_AREA,
    %INCLUDE ABNDINFO;
+   DCL 1 WS_ABND_AREA LIKE ABNDINFO_TMPL;
 
    /* *************************************************************** */
    /* PREMIERE SECTION                                                */
@@ -47,7 +47,7 @@ ABNDPROC: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
    EXEC CICS WRITE
       FILE('ABNDFILE')
       FROM(WS_ABND_AREA)
-      RIDFLD(ABND_VSAM_KEY)
+      RIDFLD(WS_ABND_AREA.ABND_VSAM_KEY)
       RESP(WS_CICS_RESP)
       RESP2(WS_CICS_RESP2);
 

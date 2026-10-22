@@ -5,7 +5,9 @@
  /* **************************************************************** */
  /* Converted from NEWACCNO.cpy - New Account Number COMMAREA.     */
  /* 88-levels converted to comments showing valid function codes.  */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE NEWACCNO_TMPL;                          */
+  DCL 1 NEWACCNO_TMPL BASED,
    3 NEWACCNO_FUNCTION            CHAR(1),
                                   /* 'G'=get-new, 'R'=rollback, 'C'=current */
    3 ACCOUNT_NUMBER               CHAR(8),

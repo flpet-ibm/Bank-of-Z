@@ -100,7 +100,10 @@ A scanned program database is available at the path stored in `.bobz/local-setti
 - IMS PL/I programs use `*PROCESS SYSTEM(IMS);` at line 1
 - DCL IMS call codes as `CHAR(4)` with trailing spaces: `DCL GU CHAR(4) INIT('GU  ');`
 - PL/I dependency search uses `**/*.inc` pattern (not `*.cpy`)
-- CICS PL/I include files (converted from COBOL copybooks) are stored in `src/base/cics/plinc/` — use `%INCLUDE filename;` to reference them in programs
+- CICS PL/I include files (converted from COBOL copybooks) are stored in `src/base/cics/plinc/` - use `%INCLUDE filename;` to reference them in programs
+- Structure includes are level-1 templates only: `DCL 1 <NAME>_TMPL BASED, 3 ...;` with no storage. The program declares the variable after the include with `DCL 1 var LIKE <NAME>_TMPL;` (for a commarea: `DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR) LIKE <NAME>_TMPL;`). Never write `DCL 1 var,` followed by `%INCLUDE`
+- Because the template and the LIKE instance share member names, always qualify member references with the instance name, e.g. `WS_CUSTOMER_RECORD.CUSTOMER_NUMBER`. An unqualified member name is ambiguous
+- Do not give a program variable the same name as a template member. Do not name an instance the same as an include or its `_TMPL`
 - Comment syntax: every block comment opener `/*` must have a matching closer `*/` on the **same line**; the closing `*/` must end at or before column 72
 - DB2 `VARCHAR` columns must be declared as `CHAR(n) VAR` in PL/I host variable structures
 - *process statement must begin in column 1

@@ -7,6 +7,9 @@
  /*         TSORTC, FACTBAL, TACTBAL, FAVBAL, TAVBAL, MESSAGE,     */
  /*         DUMMY                                                   */
  /***************************************************************** */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE BNK1TFM_TMPL;                           */
+  DCL 1 BNK1TFM_TMPL BASED,
    3 BNK1TFI,
      5 FACCNOL       FIXED BIN(15),
      5 FACCNOA       CHAR(1),

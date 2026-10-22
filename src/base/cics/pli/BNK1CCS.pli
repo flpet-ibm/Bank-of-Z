@@ -22,8 +22,8 @@
    /*****************************************************************/
    /* BMS map                                                       */
    /*****************************************************************/
-   DCL 1 BNK1CCI_MAP,
    %INCLUDE BNK1CCM;
+   DCL 1 BNK1CCI_MAP LIKE BNK1CCM_TMPL;
 
    /*****************************************************************/
    /* AID key definitions                                           */
@@ -33,8 +33,8 @@
    /*****************************************************************/
    /* CRECUST commarea                                              */
    /*****************************************************************/
-   DCL 1 SUBPGM_PARMS,
    %INCLUDE CRECUST;
+   DCL 1 SUBPGM_PARMS LIKE CRECUST_TMPL;
 
    /*****************************************************************/
    /* Working storage                                               */
@@ -89,8 +89,8 @@
 
    DCL WS_ABEND_PGM CHAR(8) INIT('ABNDPROC');
 
-   DCL 1 ABNDINFO_REC,
    %INCLUDE ABNDINFO;
+   DCL 1 ABNDINFO_REC LIKE ABNDINFO_TMPL;
 
    /*****************************************************************/
    /* MAIN PROCEDURE                                                */
@@ -101,15 +101,15 @@
    SELECT;
      WHEN (EIBCALEN = 0) DO;
        BNK1CCI_MAP = LOW(LENGTH(BNK1CCI_MAP));
-       CUSTTITI = ' ';
-       CHRISTNI = ' ';
-       CUSTINSI = ' ';
-       CUSTSNI  = ' ';
-       CUSTAD1I = ' ';
-       CUSTAD2I = ' ';
-       CUSTTITL = -1;
+       BNK1CCI_MAP.CUSTTITI = ' ';
+       BNK1CCI_MAP.CHRISTNI = ' ';
+       BNK1CCI_MAP.CUSTINSI = ' ';
+       BNK1CCI_MAP.CUSTSNI  = ' ';
+       BNK1CCI_MAP.CUSTAD1I = ' ';
+       BNK1CCI_MAP.CUSTAD2I = ' ';
+       BNK1CCI_MAP.CUSTTITL = -1;
        SEND_FLAG = 'E';
-       MESSAGEI = ' ';
+       BNK1CCI_MAP.MESSAGEI = ' ';
        CALL STORE_TERM_DEF;
        CALL SEND_MAP;
        WS_COMM_AREA = '';
@@ -143,8 +143,8 @@
      OTHERWISE DO;
        WS_COMM_AREA = DFHCOMMAREA;
        BNK1CCI_MAP = LOW(LENGTH(BNK1CCI_MAP));
-       MESSAGEI = ' ';
-       MESSAGEI = 'Invalid key pressed.';
+       BNK1CCI_MAP.MESSAGEI = ' ';
+       BNK1CCI_MAP.MESSAGEI = 'Invalid key pressed.';
        SEND_FLAG = 'A';
        CALL SEND_MAP;
      END;
@@ -206,188 +206,193 @@
    /*****************************************************************/
    EDIT_DATA: PROC;
      /* If custno2 is populated, screen already has a customer */
-     IF CUSTNO2L > 0 THEN DO;
-       MESSAGEI =
+     IF BNK1CCI_MAP.CUSTNO2L > 0 THEN DO;
+       BNK1CCI_MAP.MESSAGEI =
          'Please clear screen before creating new user';
-       CUSTTITL = -1;
+       BNK1CCI_MAP.CUSTTITL = -1;
        VALID_DATA_SW = 'N';
        RETURN;
      END;
 
-     IF CUSTTITL < 1 | CUSTTITI = ' ' |
-        CUSTTITI = LOW('10') THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI =
+     IF BNK1CCI_MAP.CUSTTITL < 1 | BNK1CCI_MAP.CUSTTITI = ' ' |
+        BNK1CCI_MAP.CUSTTITI = LOW('10') THEN DO;
+       BNK1CCI_MAP.MESSAGEI = ' ';
+       BNK1CCI_MAP.MESSAGEI =
          'Valid titles are: Mr,Mrs,Miss,Ms,Dr,Professor,' ||
          'Drs,Lord,Sir,Lady';
-       CUSTTITL = -1;
+       BNK1CCI_MAP.CUSTTITL = -1;
        VALID_DATA_SW = 'N';
        RETURN;
      END;
 
-     MESSAGEI = ' ';
+     BNK1CCI_MAP.MESSAGEI = ' ';
 
-     IF CUSTTITL > 0 THEN DO;
+     IF BNK1CCI_MAP.CUSTTITL > 0 THEN DO;
        /* Normalise title - replace underscores, normalise case */
-       CUSTTITI = TRANSLATE(CUSTTITI,'        ',
+       BNK1CCI_MAP.CUSTTITI = TRANSLATE(BNK1CCI_MAP.CUSTTITI,'        ',
                             '________');
        SELECT;
-         WHEN (TRANSLATE(TRIM(CUSTTITI),
+         WHEN (TRANSLATE(TRIM(BNK1CCI_MAP.CUSTTITI),
                'abcdefghijklmnopqrstuvwxyz',
                'ABCDEFGHIJKLMNOPQRSTUVWXYZ') = 'mr')
-           CUSTTITI = 'Mr        ';
-         WHEN (TRANSLATE(TRIM(CUSTTITI),
+           BNK1CCI_MAP.CUSTTITI = 'Mr        ';
+         WHEN (TRANSLATE(TRIM(BNK1CCI_MAP.CUSTTITI),
                'abcdefghijklmnopqrstuvwxyz',
                'ABCDEFGHIJKLMNOPQRSTUVWXYZ') = 'mrs')
-           CUSTTITI = 'Mrs       ';
-         WHEN (TRANSLATE(TRIM(CUSTTITI),
+           BNK1CCI_MAP.CUSTTITI = 'Mrs       ';
+         WHEN (TRANSLATE(TRIM(BNK1CCI_MAP.CUSTTITI),
                'abcdefghijklmnopqrstuvwxyz',
                'ABCDEFGHIJKLMNOPQRSTUVWXYZ') = 'miss')
-           CUSTTITI = 'Miss      ';
-         WHEN (TRANSLATE(TRIM(CUSTTITI),
+           BNK1CCI_MAP.CUSTTITI = 'Miss      ';
+         WHEN (TRANSLATE(TRIM(BNK1CCI_MAP.CUSTTITI),
                'abcdefghijklmnopqrstuvwxyz',
                'ABCDEFGHIJKLMNOPQRSTUVWXYZ') = 'ms')
-           CUSTTITI = 'Ms        ';
-         WHEN (TRANSLATE(TRIM(CUSTTITI),
+           BNK1CCI_MAP.CUSTTITI = 'Ms        ';
+         WHEN (TRANSLATE(TRIM(BNK1CCI_MAP.CUSTTITI),
                'abcdefghijklmnopqrstuvwxyz',
                'ABCDEFGHIJKLMNOPQRSTUVWXYZ') = 'dr')
-           CUSTTITI = 'Dr        ';
-         WHEN (TRANSLATE(TRIM(CUSTTITI),
+           BNK1CCI_MAP.CUSTTITI = 'Dr        ';
+         WHEN (TRANSLATE(TRIM(BNK1CCI_MAP.CUSTTITI),
                'abcdefghijklmnopqrstuvwxyz',
                'ABCDEFGHIJKLMNOPQRSTUVWXYZ') = 'drs')
-           CUSTTITI = 'Drs       ';
-         WHEN (TRANSLATE(TRIM(CUSTTITI),
+           BNK1CCI_MAP.CUSTTITI = 'Drs       ';
+         WHEN (TRANSLATE(TRIM(BNK1CCI_MAP.CUSTTITI),
                'abcdefghijklmnopqrstuvwxyz',
                'ABCDEFGHIJKLMNOPQRSTUVWXYZ') = 'professor')
-           CUSTTITI = 'Professor ';
-         WHEN (TRANSLATE(TRIM(CUSTTITI),
+           BNK1CCI_MAP.CUSTTITI = 'Professor ';
+         WHEN (TRANSLATE(TRIM(BNK1CCI_MAP.CUSTTITI),
                'abcdefghijklmnopqrstuvwxyz',
                'ABCDEFGHIJKLMNOPQRSTUVWXYZ') = 'lord')
-           CUSTTITI = 'Lord      ';
-         WHEN (TRANSLATE(TRIM(CUSTTITI),
+           BNK1CCI_MAP.CUSTTITI = 'Lord      ';
+         WHEN (TRANSLATE(TRIM(BNK1CCI_MAP.CUSTTITI),
                'abcdefghijklmnopqrstuvwxyz',
                'ABCDEFGHIJKLMNOPQRSTUVWXYZ') = 'sir')
-           CUSTTITI = 'Sir       ';
-         WHEN (TRANSLATE(TRIM(CUSTTITI),
+           BNK1CCI_MAP.CUSTTITI = 'Sir       ';
+         WHEN (TRANSLATE(TRIM(BNK1CCI_MAP.CUSTTITI),
                'abcdefghijklmnopqrstuvwxyz',
                'ABCDEFGHIJKLMNOPQRSTUVWXYZ') = 'lady')
-           CUSTTITI = 'Lady      ';
+           BNK1CCI_MAP.CUSTTITI = 'Lady      ';
          OTHERWISE DO;
-           MESSAGEI = ' ';
-           MESSAGEI =
+           BNK1CCI_MAP.MESSAGEI = ' ';
+           BNK1CCI_MAP.MESSAGEI =
              'Valid titles are: Mr,Mrs,Miss,Ms,Dr,Drs,' ||
              'Professor,Lord,Sir,Lady';
            VALID_DATA_SW = 'N';
-           CUSTTITL = -1;
+           BNK1CCI_MAP.CUSTTITL = -1;
            RETURN;
          END;
        END;
      END;
 
-     IF CHRISTNL < 1 | CHRISTNI = ' ' |
-        CHRISTNI = LOW('20') THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI = 'Please supply a valid First Name  ';
-       CHRISTNL = -1;
+     IF BNK1CCI_MAP.CHRISTNL < 1 | BNK1CCI_MAP.CHRISTNI = ' ' |
+        BNK1CCI_MAP.CHRISTNI = LOW('20') THEN DO;
+       BNK1CCI_MAP.MESSAGEI = ' ';
+       BNK1CCI_MAP.MESSAGEI = 'Please supply a valid First Name  ';
+       BNK1CCI_MAP.CHRISTNL = -1;
        VALID_DATA_SW = 'N';
        RETURN;
      END;
 
-     IF CUSTSNL < 1 | CUSTSNI = ' ' |
-        CUSTSNI = LOW('20') THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI = 'Please supply a valid Surname ';
-       CUSTSNL = -1;
+     IF BNK1CCI_MAP.CUSTSNL < 1 | BNK1CCI_MAP.CUSTSNI = ' ' |
+        BNK1CCI_MAP.CUSTSNI = LOW('20') THEN DO;
+       BNK1CCI_MAP.MESSAGEI = ' ';
+       BNK1CCI_MAP.MESSAGEI = 'Please supply a valid Surname ';
+       BNK1CCI_MAP.CUSTSNL = -1;
        VALID_DATA_SW = 'N';
        RETURN;
      END;
 
-     IF SUBSTR(CUSTAD1I,1,1) = '_' | CUSTAD1L < 1 |
-        CUSTAD1I = ' ' THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI = 'Please supply a valid Address Line 1 ';
+     IF SUBSTR(BNK1CCI_MAP.CUSTAD1I,1,1) = '_' | BNK1CCI_MAP.CUSTAD1L <
+         1 |
+        BNK1CCI_MAP.CUSTAD1I = ' ' THEN DO;
+       BNK1CCI_MAP.MESSAGEI = ' ';
+       BNK1CCI_MAP.MESSAGEI = 'Please supply a valid Address Line 1 ';
        VALID_DATA_SW = 'N';
-       CUSTAD1L = -1;
+       BNK1CCI_MAP.CUSTAD1L = -1;
        RETURN;
      END;
 
-     IF DOBDDL < 1 | DOBDDI = '__' THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI =
+     IF BNK1CCI_MAP.DOBDDL < 1 | BNK1CCI_MAP.DOBDDI = '__' THEN DO;
+       BNK1CCI_MAP.MESSAGEI = ' ';
+       BNK1CCI_MAP.MESSAGEI =
          'Please supply a valid Date of Birth DD';
        VALID_DATA_SW = 'N';
-       DOBDDL = -1;
+       BNK1CCI_MAP.DOBDDL = -1;
        RETURN;
      END;
 
-     IF DOBMML < 1 | DOBMMI = '__' THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI =
+     IF BNK1CCI_MAP.DOBMML < 1 | BNK1CCI_MAP.DOBMMI = '__' THEN DO;
+       BNK1CCI_MAP.MESSAGEI = ' ';
+       BNK1CCI_MAP.MESSAGEI =
          'Please supply a valid Date of Birth MM';
        VALID_DATA_SW = 'N';
-       DOBMML = -1;
+       BNK1CCI_MAP.DOBMML = -1;
        RETURN;
      END;
 
-     IF DOBYYL < 4 | DOBYYI = '____' THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI =
+     IF BNK1CCI_MAP.DOBYYL < 4 | BNK1CCI_MAP.DOBYYI = '____' THEN DO;
+       BNK1CCI_MAP.MESSAGEI = ' ';
+       BNK1CCI_MAP.MESSAGEI =
          'Please supply a valid Date of Birth YYYY';
        VALID_DATA_SW = 'N';
-       DOBYYL = -1;
+       BNK1CCI_MAP.DOBYYL = -1;
        RETURN;
      END;
 
-     IF ^VERIFY(DOBDDI,'0123456789') = 0 THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI =
+     IF ^VERIFY(BNK1CCI_MAP.DOBDDI,'0123456789') = 0 THEN DO;
+       BNK1CCI_MAP.MESSAGEI = ' ';
+       BNK1CCI_MAP.MESSAGEI =
          'Non numeric Date of Birth DD entered      ';
        VALID_DATA_SW = 'N';
-       DOBDDL = -1;
+       BNK1CCI_MAP.DOBDDL = -1;
        RETURN;
      END;
 
-     IF ^VERIFY(DOBMMI,'0123456789') = 0 THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI =
+     IF ^VERIFY(BNK1CCI_MAP.DOBMMI,'0123456789') = 0 THEN DO;
+       BNK1CCI_MAP.MESSAGEI = ' ';
+       BNK1CCI_MAP.MESSAGEI =
          'Non numeric Date of Birth MM entered      ';
        VALID_DATA_SW = 'N';
-       DOBMML = -1;
+       BNK1CCI_MAP.DOBMML = -1;
        RETURN;
      END;
 
-     IF ^VERIFY(DOBYYI,'0123456789') = 0 THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI =
+     IF ^VERIFY(BNK1CCI_MAP.DOBYYI,'0123456789') = 0 THEN DO;
+       BNK1CCI_MAP.MESSAGEI = ' ';
+       BNK1CCI_MAP.MESSAGEI =
          'Non numeric Date of Birth YYYY entered  ';
        VALID_DATA_SW = 'N';
-       DOBYYL = -1;
+       BNK1CCI_MAP.DOBYYL = -1;
        RETURN;
      END;
 
-     IF FIXED(DOBDDI) < 1 | FIXED(DOBDDI) > 31 THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI =
+     IF FIXED(BNK1CCI_MAP.DOBDDI) < 1 | FIXED(BNK1CCI_MAP.DOBDDI) > 31
+         THEN DO;
+       BNK1CCI_MAP.MESSAGEI = ' ';
+       BNK1CCI_MAP.MESSAGEI =
          'Please supply a valid Date of Birth (DD)    ';
        VALID_DATA_SW = 'N';
-       DOBDDL = -1;
+       BNK1CCI_MAP.DOBDDL = -1;
        RETURN;
      END;
 
-     IF FIXED(DOBMMI) < 1 | FIXED(DOBMMI) > 12 THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI =
+     IF FIXED(BNK1CCI_MAP.DOBMMI) < 1 | FIXED(BNK1CCI_MAP.DOBMMI) > 12
+         THEN DO;
+       BNK1CCI_MAP.MESSAGEI = ' ';
+       BNK1CCI_MAP.MESSAGEI =
          'Please supply a valid Date of Birth (MM)    ';
        VALID_DATA_SW = 'N';
-       DOBMML = -1;
+       BNK1CCI_MAP.DOBMML = -1;
        RETURN;
      END;
 
-     IF CUSTTITL < 1 | CHRISTNL < 1 | CUSTSNL < 1 |
-        CUSTAD1L < 1 | DOBDDL < 1 | DOBMML < 1 |
-        DOBYYL < 1 THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI = 'Missing expected data.               ';
+     IF BNK1CCI_MAP.CUSTTITL < 1 | BNK1CCI_MAP.CHRISTNL < 1 |
+         BNK1CCI_MAP.CUSTSNL < 1 |
+        BNK1CCI_MAP.CUSTAD1L < 1 | BNK1CCI_MAP.DOBDDL < 1 |
+            BNK1CCI_MAP.DOBMML < 1 |
+        BNK1CCI_MAP.DOBYYL < 1 THEN DO;
+       BNK1CCI_MAP.MESSAGEI = ' ';
+       BNK1CCI_MAP.MESSAGEI = 'Missing expected data.               ';
        VALID_DATA_SW = 'N';
        RETURN;
      END;
@@ -398,46 +403,49 @@
    /*****************************************************************/
    CRE_CUST_DATA: PROC;
      SUBPGM_PARMS    = '';
-     COMM_EYECATCHER = 'CUST';
-     COMM_SUCCESS    = 'N';
+     SUBPGM_PARMS.COMM_EYECATCHER = 'CUST';
+     SUBPGM_PARMS.COMM_SUCCESS    = 'N';
 
      /* Replace underscores with spaces */
-     CUSTTITI = TRANSLATE(CUSTTITI,'        ','________');
-     CHRISTNI = TRANSLATE(CHRISTNI,
+     BNK1CCI_MAP.CUSTTITI =
+         TRANSLATE(BNK1CCI_MAP.CUSTTITI,'        ','________');
+     BNK1CCI_MAP.CHRISTNI = TRANSLATE(BNK1CCI_MAP.CHRISTNI,
        '                    ','____________________');
-     CUSTINSI = TRANSLATE(CUSTINSI,'  ','__');
-     CUSTSNI  = TRANSLATE(CUSTSNI,
+     BNK1CCI_MAP.CUSTINSI = TRANSLATE(BNK1CCI_MAP.CUSTINSI,'  ','__');
+     BNK1CCI_MAP.CUSTSNI  = TRANSLATE(BNK1CCI_MAP.CUSTSNI,
        '                    ','____________________');
 
-     COMM_TITLE      = CUSTTITI;
-     COMM_FIRST_NAME = CHRISTNI;
-     COMM_LAST_NAME  = TRIM(CUSTINSI) || ' ' || CUSTSNI;
+     SUBPGM_PARMS.COMM_TITLE      = BNK1CCI_MAP.CUSTTITI;
+     SUBPGM_PARMS.COMM_FIRST_NAME = BNK1CCI_MAP.CHRISTNI;
+     SUBPGM_PARMS.COMM_LAST_NAME = TRIM(BNK1CCI_MAP.CUSTINSI) || ' ' ||
+         BNK1CCI_MAP.CUSTSNI;
 
-     CUSTAD1I = TRANSLATE(CUSTAD1I,
+     BNK1CCI_MAP.CUSTAD1I = TRANSLATE(BNK1CCI_MAP.CUSTAD1I,
        '                                                  ',
        '__________________________________________________');
-     CUSTAD2I = TRANSLATE(CUSTAD2I,
+     BNK1CCI_MAP.CUSTAD2I = TRANSLATE(BNK1CCI_MAP.CUSTAD2I,
        '                                                  ',
        '__________________________________________________');
-     CITYI    = TRANSLATE(CITYI,
+     BNK1CCI_MAP.CITYI    = TRANSLATE(BNK1CCI_MAP.CITYI,
        '                                                  ',
        '__________________________________________________');
-     POSTCODEI = TRANSLATE(POSTCODEI,'          ','__________');
-     COUNTRYI  = TRANSLATE(COUNTRYI,
+     BNK1CCI_MAP.POSTCODEI =
+         TRANSLATE(BNK1CCI_MAP.POSTCODEI,'          ','__________');
+     BNK1CCI_MAP.COUNTRYI  = TRANSLATE(BNK1CCI_MAP.COUNTRYI,
        '                                                  ',
        '__________________________________________________');
 
-     COMM_ADDR_LINE1 = CUSTAD1I;
-     COMM_ADDR_LINE2 = CUSTAD2I;
-     COMM_CITY       = CITYI;
-     COMM_POSTCODE   = POSTCODEI;
-     COMM_COUNTRY    = COUNTRYI;
-     COMM_PHONE      = ' ';
-     COMM_STATUS     = ' ';
+     SUBPGM_PARMS.COMM_ADDR_LINE1 = BNK1CCI_MAP.CUSTAD1I;
+     SUBPGM_PARMS.COMM_ADDR_LINE2 = BNK1CCI_MAP.CUSTAD2I;
+     SUBPGM_PARMS.COMM_CITY       = BNK1CCI_MAP.CITYI;
+     SUBPGM_PARMS.COMM_POSTCODE   = BNK1CCI_MAP.POSTCODEI;
+     SUBPGM_PARMS.COMM_COUNTRY    = BNK1CCI_MAP.COUNTRYI;
+     SUBPGM_PARMS.COMM_PHONE      = ' ';
+     SUBPGM_PARMS.COMM_STATUS     = ' ';
 
-     COMM_DOB_DAY    = DOBDDI;
-     COMM_DOB_MONTH  = DOBMMI;
-     COMM_DOB_YEAR   = DOBYYI;
+     SUBPGM_PARMS.COMM_DOB_DAY    = BNK1CCI_MAP.DOBDDI;
+     SUBPGM_PARMS.COMM_DOB_MONTH  = BNK1CCI_MAP.DOBMMI;
+     SUBPGM_PARMS.COMM_DOB_YEAR   = BNK1CCI_MAP.DOBYYI;
 
      EXEC CICS LINK PROGRAM('CRECUST')
                COMMAREA(SUBPGM_PARMS)
@@ -456,42 +464,42 @@
        CALL ABEND_THIS_TASK;
      END;
 
-     IF COMM_SUCCESS = 'N' THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI =
+     IF SUBPGM_PARMS.COMM_SUCCESS = 'N' THEN DO;
+       BNK1CCI_MAP.MESSAGEI = ' ';
+       BNK1CCI_MAP.MESSAGEI =
          'Sorry but unable to create Customer record ';
-       IF COMM_FAIL_CODE = 'O' THEN
-         MESSAGEI =
+       IF SUBPGM_PARMS.COMM_FAIL_CODE = 'O' THEN
+         BNK1CCI_MAP.MESSAGEI =
            'Sorry, customer is too old. Please check D.O.B.';
-       IF COMM_FAIL_CODE = 'Y' THEN
-         MESSAGEI =
+       IF SUBPGM_PARMS.COMM_FAIL_CODE = 'Y' THEN
+         BNK1CCI_MAP.MESSAGEI =
            'Sorry, customer D.O.B. is in the future.';
-       IF COMM_FAIL_CODE = 'Z' THEN
-         MESSAGEI =
+       IF SUBPGM_PARMS.COMM_FAIL_CODE = 'Z' THEN
+         BNK1CCI_MAP.MESSAGEI =
            'Sorry, customer D.O.B. is invalid.';
        VALID_DATA_SW = 'N';
      END;
 
-     IF COMM_SUCCESS = 'Y' THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI =
+     IF SUBPGM_PARMS.COMM_SUCCESS = 'Y' THEN DO;
+       BNK1CCI_MAP.MESSAGEI = ' ';
+       BNK1CCI_MAP.MESSAGEI =
          'The Customer record has been successfully created';
-       SORTCI   = COMM_SORTCODE;
-       CUSTNO2I = COMM_NUMBER;
+       BNK1CCI_MAP.SORTCI   = SUBPGM_PARMS.COMM_SORTCODE;
+       BNK1CCI_MAP.CUSTNO2I = SUBPGM_PARMS.COMM_NUMBER;
      END;
 
-     DOBYYI   = COMM_DOB_YEAR;
-     DOBMMI   = COMM_DOB_MONTH;
-     DOBDDI   = COMM_DOB_DAY;
-     CUSTAD1I = COMM_ADDR_LINE1;
-     CUSTAD2I = COMM_ADDR_LINE2;
-     CITYI    = COMM_CITY;
-     POSTCODEI = COMM_POSTCODE;
-     COUNTRYI = COMM_COUNTRY;
-     CREDSCI  = COMM_CREDIT_SCORE;
-     SCRDTDDI = COMM_CS_REVIEW_DAY;
-     SCRDTMMI = COMM_CS_REVIEW_MONTH;
-     SCRDTYYI = COMM_CS_REVIEW_YEAR;
+     BNK1CCI_MAP.DOBYYI   = SUBPGM_PARMS.COMM_DOB_YEAR;
+     BNK1CCI_MAP.DOBMMI   = SUBPGM_PARMS.COMM_DOB_MONTH;
+     BNK1CCI_MAP.DOBDDI   = SUBPGM_PARMS.COMM_DOB_DAY;
+     BNK1CCI_MAP.CUSTAD1I = SUBPGM_PARMS.COMM_ADDR_LINE1;
+     BNK1CCI_MAP.CUSTAD2I = SUBPGM_PARMS.COMM_ADDR_LINE2;
+     BNK1CCI_MAP.CITYI    = SUBPGM_PARMS.COMM_CITY;
+     BNK1CCI_MAP.POSTCODEI = SUBPGM_PARMS.COMM_POSTCODE;
+     BNK1CCI_MAP.COUNTRYI = SUBPGM_PARMS.COMM_COUNTRY;
+     BNK1CCI_MAP.CREDSCI  = SUBPGM_PARMS.COMM_CREDIT_SCORE;
+     BNK1CCI_MAP.SCRDTDDI = SUBPGM_PARMS.COMM_CS_REVIEW_DAY;
+     BNK1CCI_MAP.SCRDTMMI = SUBPGM_PARMS.COMM_CS_REVIEW_MONTH;
+     BNK1CCI_MAP.SCRDTYYI = SUBPGM_PARMS.COMM_CS_REVIEW_YEAR;
    END CRE_CUST_DATA;
 
    /*****************************************************************/
@@ -601,20 +609,20 @@
    SETUP_ABND_INFO: PROC (P_MSG);
      DCL P_MSG CHAR(*);
      ABNDINFO_REC = '';
-     ABND_RESPCODE  = EIBRESP;
-     ABND_RESP2CODE = EIBRESP2;
-     EXEC CICS ASSIGN APPLID(ABND_APPLID);
-     ABND_TASKNO_KEY = EIBTASKN;
-     ABND_TRANID     = EIBTRNID;
+     ABNDINFO_REC.ABND_RESPCODE  = EIBRESP;
+     ABNDINFO_REC.ABND_RESP2CODE = EIBRESP2;
+     EXEC CICS ASSIGN APPLID(ABNDINFO_REC.ABND_APPLID);
+     ABNDINFO_REC.ABND_TASKNO_KEY = EIBTASKN;
+     ABNDINFO_REC.ABND_TRANID     = EIBTRNID;
      CALL POPULATE_TIME_DATE;
-     ABND_DATE = WS_ORIG_DATE;
-     ABND_TIME = WS_TIME_NOW_HH || ':' ||
+     ABNDINFO_REC.ABND_DATE = WS_ORIG_DATE;
+     ABNDINFO_REC.ABND_TIME = WS_TIME_NOW_HH || ':' ||
                  WS_TIME_NOW_MM || ':' || WS_TIME_NOW_SS;
-     ABND_UTIME_KEY = WS_U_TIME;
-     ABND_CODE = 'HBNK';
-     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM);
-     ABND_SQLCODE = '0';
-     ABND_FREEFORM = SUBSTR(P_MSG || ' EIBRESP=' ||
+     ABNDINFO_REC.ABND_UTIME_KEY = WS_U_TIME;
+     ABNDINFO_REC.ABND_CODE = 'HBNK';
+     EXEC CICS ASSIGN PROGRAM(ABNDINFO_REC.ABND_PROGRAM);
+     ABNDINFO_REC.ABND_SQLCODE = '0';
+     ABNDINFO_REC.ABND_FREEFORM = SUBSTR(P_MSG || ' EIBRESP=' ||
        CHAR(EIBRESP) || ' RESP2=' || CHAR(EIBRESP2),1,80);
      EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
                COMMAREA(ABNDINFO_REC);

@@ -4,7 +4,9 @@
  /*                                                                */
  /* **************************************************************** */
  /* Converted from ABNDINFO.cpy                                    */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE ABNDINFO_TMPL;                          */
+  DCL 1 ABNDINFO_TMPL BASED,
    3 ABND_VSAM_KEY,
      5 ABND_UTIME_KEY         FIXED DEC(15,0),
      5 ABND_TASKNO_KEY        CHAR(4),

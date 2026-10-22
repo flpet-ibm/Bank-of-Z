@@ -5,10 +5,11 @@
  /* **************************************************************** */
  /* Converted from PROCISRT.cpy - Process Insert COMMAREA.         */
  /* Note: PROCISRT.cpy defined its own 01-level.                   */
- /* For PL/I include we strip the 01 level; declare in program.   */
  /* Multiple REDEFINES converted to UNIONs.                        */
  /* 88-levels converted to comments showing valid function codes.  */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE PROCISRT_TMPL;                          */
+  DCL 1 PROCISRT_TMPL BASED,
    3 PROCISRT_FUNCTION            CHAR(1),
      /* '1'=debit '2'=credit '3'=xfr-local '4'=del-cust */
      /* '5'=cre-cust '6'=del-acc '7'=cre-acc             */

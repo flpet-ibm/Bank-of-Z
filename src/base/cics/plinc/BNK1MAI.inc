@@ -5,6 +5,9 @@
  /* Generated from BNK1MAI.bms                                     */
  /* Fields: ACTION, MESSAGE, DUMMY                                 */
  /***************************************************************** */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE BNK1MAI_TMPL;                           */
+  DCL 1 BNK1MAI_TMPL BASED,
    3 BNK1MEI,
      5 ACTIONL       FIXED BIN(15),
      5 ACTIONA       CHAR(1),

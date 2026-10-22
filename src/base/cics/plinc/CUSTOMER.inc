@@ -4,7 +4,9 @@
  /*                                                                */
  /* **************************************************************** */
  /* Converted from CUSTOMER.cpy                                    */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE CUSTOMER_TMPL;                          */
+  DCL 1 CUSTOMER_TMPL BASED,
    3 CUSTOMER_RECORD,
      5 CUSTOMER_EYECATCHER           CHAR(4),
      5 CUSTOMER_KEY,

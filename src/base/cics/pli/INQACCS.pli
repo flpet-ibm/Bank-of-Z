@@ -15,8 +15,8 @@ INQACCS: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
    /* *************************************************************** */
    /* DFHCOMMAREA - INQACCS COMMAREA                                 */
    /* *************************************************************** */
-   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR),
    %INCLUDE INQACCS;
+   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR) LIKE INQACCS_TMPL;
 
    /* *************************************************************** */
    /* Sort code constant                                              */
@@ -108,8 +108,8 @@ INQACCS: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
    /* *************************************************************** */
    /* PREMIERE SECTION                                               */
    /* *************************************************************** */
-   COMM_SUCCESS   = 'N';
-   COMM_FAIL_CODE = '0';
+   DFHCOMMAREA.COMM_SUCCESS   = 'N';
+   DFHCOMMAREA.COMM_FAIL_CODE = '0';
 
    HV_ACCOUNT_SORTCODE = SORTCODE;
 
@@ -129,9 +129,9 @@ INQACCS: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
       IF SQLCODE ^= 0 THEN
       DO;
          CALL CHECK_FOR_STORM_DRAIN_DB2;
-         COMM_SUCCESS       = 'N';
-         COMM_FAIL_CODE     = '2';
-         NUMBER_OF_ACCOUNTS = 0;
+         DFHCOMMAREA.COMM_SUCCESS       = 'N';
+         DFHCOMMAREA.COMM_FAIL_CODE     = '2';
+         DFHCOMMAREA.NUMBER_OF_ACCOUNTS = 0;
          EXEC CICS SYNCPOINT ROLLBACK
               RESP(WS_CICS_RESP)
               RESP2(WS_CICS_RESP2);
@@ -148,15 +148,15 @@ INQACCS: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
          PUT SKIP LIST('Failure closing DB2 CURSOR ACC_ALL_CURSOR. '
                        || 'SQL code=' || SQLCODE_DISPLAY);
          CALL CHECK_FOR_STORM_DRAIN_DB2;
-         COMM_SUCCESS   = 'N';
-         COMM_FAIL_CODE = '4';
+         DFHCOMMAREA.COMM_SUCCESS   = 'N';
+         DFHCOMMAREA.COMM_FAIL_CODE = '4';
          EXEC CICS SYNCPOINT ROLLBACK
               RESP(WS_CICS_RESP)
               RESP2(WS_CICS_RESP2);
          RETURN;
       END;
 
-      COMM_SUCCESS = 'Y';
+      DFHCOMMAREA.COMM_SUCCESS = 'Y';
 
    END READ_ACCOUNT_DB2;
 
@@ -166,9 +166,9 @@ INQACCS: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
    FETCH_DATA: PROC;
       DCL I FIXED BIN(31);
 
-      NUMBER_OF_ACCOUNTS = 0;
+      DFHCOMMAREA.NUMBER_OF_ACCOUNTS = 0;
 
-      DO WHILE (SQLCODE = 0 & NUMBER_OF_ACCOUNTS < 20);
+      DO WHILE (SQLCODE = 0 & DFHCOMMAREA.NUMBER_OF_ACCOUNTS < 20);
 
          EXEC SQL FETCH FROM ACC_ALL_CURSOR
          INTO :HV_ACCOUNT_EYECATCHER,
@@ -186,7 +186,7 @@ INQACCS: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
 
          IF SQLCODE = 100 THEN
          DO;
-            COMM_SUCCESS = 'Y';
+            DFHCOMMAREA.COMM_SUCCESS = 'Y';
             RETURN;
          END;
 
@@ -196,42 +196,43 @@ INQACCS: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
             PUT SKIP LIST('Failure fetching from ACC_ALL_CURSOR. '
                           || 'SQL code=' || SQLCODE_DISPLAY);
             CALL CHECK_FOR_STORM_DRAIN_DB2;
-            COMM_SUCCESS       = 'N';
-            NUMBER_OF_ACCOUNTS = 0;
-            COMM_FAIL_CODE     = '3';
+            DFHCOMMAREA.COMM_SUCCESS       = 'N';
+            DFHCOMMAREA.NUMBER_OF_ACCOUNTS = 0;
+            DFHCOMMAREA.COMM_FAIL_CODE     = '3';
             EXEC CICS SYNCPOINT ROLLBACK
                  RESP(WS_CICS_RESP)
                  RESP2(WS_CICS_RESP2);
             RETURN;
          END;
 
-         NUMBER_OF_ACCOUNTS = NUMBER_OF_ACCOUNTS + 1;
-         I = NUMBER_OF_ACCOUNTS;
+         DFHCOMMAREA.NUMBER_OF_ACCOUNTS = DFHCOMMAREA.NUMBER_OF_ACCOUNTS
+             + 1;
+         I = DFHCOMMAREA.NUMBER_OF_ACCOUNTS;
 
-         COMM_EYE(I)      = HV_ACCOUNT_EYECATCHER;
-         COMM_CUSTNO(I)   = HV_ACCOUNT_CUST_NO;
-         COMM_SCODE(I)    = HV_ACCOUNT_SORTCODE;
-         COMM_ACCNO(I)    = HV_ACCOUNT_ACC_NO;
-         COMM_ACC_TYPE(I) = HV_ACCOUNT_ACC_TYPE;
-         COMM_INT_RATE(I) = HV_ACCOUNT_INT_RATE;
+         DFHCOMMAREA.COMM_EYE(I)      = HV_ACCOUNT_EYECATCHER;
+         DFHCOMMAREA.COMM_CUSTNO(I)   = HV_ACCOUNT_CUST_NO;
+         DFHCOMMAREA.COMM_SCODE(I)    = HV_ACCOUNT_SORTCODE;
+         DFHCOMMAREA.COMM_ACCNO(I)    = HV_ACCOUNT_ACC_NO;
+         DFHCOMMAREA.COMM_ACC_TYPE(I) = HV_ACCOUNT_ACC_TYPE;
+         DFHCOMMAREA.COMM_INT_RATE(I) = HV_ACCOUNT_INT_RATE;
 
          /* Reformat DB2 date YYYY-MM-DD → DDMMYYYY */
          DB2_DATE_REFORMAT  = HV_ACCOUNT_OPENED;
-         COMM_OPENED(I) = DB2_DATE_REF_DAY ||
+         DFHCOMMAREA.COMM_OPENED(I) = DB2_DATE_REF_DAY ||
                           DB2_DATE_REF_MNTH || DB2_DATE_REF_YR;
 
-         COMM_OVERDRAFT(I)    = HV_ACCOUNT_OVERDRAFT_LIM;
+         DFHCOMMAREA.COMM_OVERDRAFT(I)    = HV_ACCOUNT_OVERDRAFT_LIM;
 
          DB2_DATE_REFORMAT    = HV_ACCOUNT_LAST_STMT;
-         COMM_LAST_STMT_DT(I) = DB2_DATE_REF_DAY ||
+         DFHCOMMAREA.COMM_LAST_STMT_DT(I) = DB2_DATE_REF_DAY ||
                                 DB2_DATE_REF_MNTH || DB2_DATE_REF_YR;
 
          DB2_DATE_REFORMAT    = HV_ACCOUNT_NEXT_STMT;
-         COMM_NEXT_STMT_DT(I) = DB2_DATE_REF_DAY ||
+         DFHCOMMAREA.COMM_NEXT_STMT_DT(I) = DB2_DATE_REF_DAY ||
                                 DB2_DATE_REF_MNTH || DB2_DATE_REF_YR;
 
-         COMM_ACTUAL_BAL(I) = HV_ACCOUNT_ACTUAL_BAL;
-         COMM_AVAIL_BAL(I)  = HV_ACCOUNT_AVAIL_BAL;
+         DFHCOMMAREA.COMM_ACTUAL_BAL(I) = HV_ACCOUNT_ACTUAL_BAL;
+         DFHCOMMAREA.COMM_AVAIL_BAL(I)  = HV_ACCOUNT_AVAIL_BAL;
 
       END;
 

@@ -4,7 +4,9 @@
  /*                                                                */
  /* **************************************************************** */
  /* Converted from PAYDBCR.cpy - Pay Debit/Credit COMMAREA.        */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE PAYDBCR_TMPL;                           */
+  DCL 1 PAYDBCR_TMPL BASED,
    3 COMM_ACCNO                  CHAR(8),
    3 COMM_AMT                    FIXED DEC(12,2),
    3 COMM_SORTC                  CHAR(6),

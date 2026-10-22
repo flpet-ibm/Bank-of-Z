@@ -6,7 +6,9 @@
  /* Converted from INQACCCZ.cpy - Inquire Accounts by Customer     */
  /*  (z/OS Connect variant, PCB as CHAR(4)).                       */
  /* OCCURS DEPENDING ON converted to fixed (20) per COBOL max.    */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE INQACCCZ_TMPL;                          */
+  DCL 1 INQACCCZ_TMPL BASED,
    3 NUMBER_OF_ACCOUNTS           FIXED BIN(31),
    3 CUSTOMER_NUMBER              CHAR(10),
    3 COMM_SUCCESS                 CHAR(1),

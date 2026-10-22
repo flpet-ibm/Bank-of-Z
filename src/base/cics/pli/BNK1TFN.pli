@@ -24,8 +24,8 @@
    /*****************************************************************/
    /* BMS map                                                       */
    /*****************************************************************/
-   DCL 1 BNK1TFI_MAP,
    %INCLUDE BNK1TFM;
+   DCL 1 BNK1TFI_MAP LIKE BNK1TFM_TMPL;
 
    /*****************************************************************/
    /* AID key definitions                                           */
@@ -35,8 +35,8 @@
    /*****************************************************************/
    /* ABNDINFO                                                      */
    /*****************************************************************/
-   DCL 1 ABNDINFO_REC,
    %INCLUDE ABNDINFO;
+   DCL 1 ABNDINFO_REC LIKE ABNDINFO_TMPL;
 
    /*****************************************************************/
    /* Working storage                                               */
@@ -156,7 +156,7 @@
      OTHERWISE
        DO;
          BNK1TFI_MAP = LOW(LENGTH(BNK1TFI_MAP));
-         MESSAGEI = 'Invalid key pressed.';
+         BNK1TFI_MAP.MESSAGEI = 'Invalid key pressed.';
          SEND_FLAG = 'A';
          CALL SEND_MAP;
        END;
@@ -229,29 +229,31 @@
    /* EDIT_DATA                                                     */
    /*****************************************************************/
    EDIT_DATA: PROC;
-     EXEC CICS BIF DEEDIT FIELD(FACCNOI);
-     IF VERIFY(FACCNOI,'0123456789') ^= 0 THEN
+     EXEC CICS BIF DEEDIT FIELD(BNK1TFI_MAP.FACCNOI);
+     IF VERIFY(BNK1TFI_MAP.FACCNOI,'0123456789') ^= 0 THEN
        DO;
-         MESSAGEI = 'Please enter a FROM account no  ';
+         BNK1TFI_MAP.MESSAGEI = 'Please enter a FROM account no  ';
          VALID_DATA_SW = 'N';
          RETURN;
        END;
-     EXEC CICS BIF DEEDIT FIELD(TACCNOI);
-     IF VERIFY(TACCNOI,'0123456789') ^= 0 THEN
+     EXEC CICS BIF DEEDIT FIELD(BNK1TFI_MAP.TACCNOI);
+     IF VERIFY(BNK1TFI_MAP.TACCNOI,'0123456789') ^= 0 THEN
        DO;
-         MESSAGEI = 'Please enter a TO account no    ';
+         BNK1TFI_MAP.MESSAGEI = 'Please enter a TO account no    ';
          VALID_DATA_SW = 'N';
          RETURN;
        END;
-     IF FACCNOI = TACCNOI THEN
+     IF BNK1TFI_MAP.FACCNOI = BNK1TFI_MAP.TACCNOI THEN
        DO;
-         MESSAGEI = 'The FROM & TO account should be different';
+         BNK1TFI_MAP.MESSAGEI =
+             'The FROM & TO account should be different';
          VALID_DATA_SW = 'N';
          RETURN;
        END;
-     IF FACCNOI = '00000000' | TACCNOI = '00000000' THEN
+     IF BNK1TFI_MAP.FACCNOI = '00000000' | BNK1TFI_MAP.TACCNOI =
+         '00000000' THEN
        DO;
-         MESSAGEI = 'Account no 00000000 is not valid';
+         BNK1TFI_MAP.MESSAGEI = 'Account no 00000000 is not valid';
          VALID_DATA_SW = 'N';
          RETURN;
        END;
@@ -263,8 +265,8 @@
    /*****************************************************************/
    GET_ACC_DATA: PROC;
      SUBPGM_PARMS = '';
-     SUBPGM_FACCNO = FACCNOI;
-     SUBPGM_TACCNO = TACCNOI;
+     SUBPGM_FACCNO = BNK1TFI_MAP.FACCNOI;
+     SUBPGM_TACCNO = BNK1TFI_MAP.TACCNOI;
      SUBPGM_SUCCESS = 'N';
      SUBPGM_AMT = WS_AMOUNT_FLOAT;
      EXEC CICS LINK PROGRAM('XFRFUN')
@@ -285,59 +287,59 @@
          CALL ABEND_THIS_TASK;
        END;
      /* Map returned data to screen */
-     FACCNO2I = SUBPGM_FACCNO;
-     FSORTCI  = SUBPGM_FSCODE;
-     TACCNO2I = SUBPGM_TACCNO;
-     TSORTCI  = SUBPGM_TSCODE;
+     BNK1TFI_MAP.FACCNO2I = SUBPGM_FACCNO;
+     BNK1TFI_MAP.FSORTCI  = SUBPGM_FSCODE;
+     BNK1TFI_MAP.TACCNO2I = SUBPGM_TACCNO;
+     BNK1TFI_MAP.TSORTCI  = SUBPGM_TSCODE;
      FROM_AVAIL_BAL_DISP  = 0;
      FROM_ACTUAL_BAL_DISP = 0;
      TO_AVAIL_BAL_DISP    = 0;
      TO_ACTUAL_BAL_DISP   = 0;
-     FAVBALI  = FROM_AVAIL_BAL_DISP;
-     FACTBALI = FROM_ACTUAL_BAL_DISP;
-     TAVBALI  = TO_AVAIL_BAL_DISP;
-     TACTBALI = TO_ACTUAL_BAL_DISP;
+     BNK1TFI_MAP.FAVBALI  = FROM_AVAIL_BAL_DISP;
+     BNK1TFI_MAP.FACTBALI = FROM_ACTUAL_BAL_DISP;
+     BNK1TFI_MAP.TAVBALI  = TO_AVAIL_BAL_DISP;
+     BNK1TFI_MAP.TACTBALI = TO_ACTUAL_BAL_DISP;
      IF SUBPGM_SUCCESS = 'N' THEN
        DO;
          VALID_DATA_SW = 'N';
          SELECT(SUBPGM_FAIL_CODE);
            WHEN('1')
-             MESSAGEI =
+             BNK1TFI_MAP.MESSAGEI =
                'Sorry the FROM ACCOUNT no was not found.';
            WHEN('2')
-             MESSAGEI =
+             BNK1TFI_MAP.MESSAGEI =
                'Sorry the TO ACCOUNT no was not found.';
            WHEN('3')
-             MESSAGEI =
+             BNK1TFI_MAP.MESSAGEI =
                'Sorry the transfer could not be applied.';
            WHEN('4')
-             MESSAGEI =
+             BNK1TFI_MAP.MESSAGEI =
                'Please supply an amount greater than zero.';
            OTHERWISE
-             MESSAGEI =
+             BNK1TFI_MAP.MESSAGEI =
                'Sorry the transfer could not be applied.';
          END;
          RETURN;
        END;
      IF SUBPGM_SUCCESS ^= 'Y' THEN
        DO;
-         MESSAGEI =
+         BNK1TFI_MAP.MESSAGEI =
            'Sorry transfer could not be applied.';
          RETURN;
        END;
-     MESSAGEI = 'Transfer successfully applied.';
-     FACCNO2I = SUBPGM_FACCNO;
-     FSORTCI  = SUBPGM_FSCODE;
-     TACCNO2I = SUBPGM_TACCNO;
-     TSORTCI  = SUBPGM_TSCODE;
+     BNK1TFI_MAP.MESSAGEI = 'Transfer successfully applied.';
+     BNK1TFI_MAP.FACCNO2I = SUBPGM_FACCNO;
+     BNK1TFI_MAP.FSORTCI  = SUBPGM_FSCODE;
+     BNK1TFI_MAP.TACCNO2I = SUBPGM_TACCNO;
+     BNK1TFI_MAP.TSORTCI  = SUBPGM_TSCODE;
      FROM_ACTUAL_BAL_DISP = SUBPGM_FACTBAL;
      FROM_AVAIL_BAL_DISP  = SUBPGM_FAVBAL;
      TO_ACTUAL_BAL_DISP   = SUBPGM_TACTBAL;
      TO_AVAIL_BAL_DISP    = SUBPGM_TAVBAL;
-     FACTBALI = FROM_ACTUAL_BAL_DISP;
-     FAVBALI  = FROM_AVAIL_BAL_DISP;
-     TACTBALI = TO_ACTUAL_BAL_DISP;
-     TAVBALI  = TO_AVAIL_BAL_DISP;
+     BNK1TFI_MAP.FACTBALI = FROM_ACTUAL_BAL_DISP;
+     BNK1TFI_MAP.FAVBALI  = FROM_AVAIL_BAL_DISP;
+     BNK1TFI_MAP.TACTBALI = TO_ACTUAL_BAL_DISP;
+     BNK1TFI_MAP.TAVBALI  = TO_AVAIL_BAL_DISP;
    END GET_ACC_DATA;
 
    /*****************************************************************/
@@ -456,29 +458,29 @@
      DCL I FIXED BIN(31);
      DCL C CHAR(1);
      WS_AMOUNT_FLOAT = 0;
-     IF AMTL = 0 THEN
+     IF BNK1TFI_MAP.AMTL = 0 THEN
        DO;
-         MESSAGEI = 'The Amount entered must be numeric.';
+         BNK1TFI_MAP.MESSAGEI = 'The Amount entered must be numeric.';
          VALID_DATA_SW = 'N';
-         AMTL = -1;
+         BNK1TFI_MAP.AMTL = -1;
          RETURN;
        END;
      /* Strip leading spaces */
      WS_NUM_COUNT_TOTAL = 0;
-     DO I = 1 TO AMTL;
-       C = SUBSTR(AMTI,I,1);
+     DO I = 1 TO BNK1TFI_MAP.AMTL;
+       C = SUBSTR(BNK1TFI_MAP.AMTI,I,1);
        IF C = ' ' THEN WS_NUM_COUNT_TOTAL = WS_NUM_COUNT_TOTAL + 1;
        ELSE LEAVE;
      END;
-     IF WS_NUM_COUNT_TOTAL = AMTL THEN
+     IF WS_NUM_COUNT_TOTAL = BNK1TFI_MAP.AMTL THEN
        DO;
-         MESSAGEI = 'The Amount entered must be numeric.';
+         BNK1TFI_MAP.MESSAGEI = 'The Amount entered must be numeric.';
          VALID_DATA_SW = 'N';
-         AMTL = -1;
+         BNK1TFI_MAP.AMTL = -1;
          RETURN;
        END;
-     WS_AMOUNT_UNSTR_L = AMTL - WS_NUM_COUNT_TOTAL;
-     WS_AMOUNT_UNSTR = SUBSTR(AMTI,
+     WS_AMOUNT_UNSTR_L = BNK1TFI_MAP.AMTL - WS_NUM_COUNT_TOTAL;
+     WS_AMOUNT_UNSTR = SUBSTR(BNK1TFI_MAP.AMTI,
        WS_NUM_COUNT_TOTAL + 1, WS_AMOUNT_UNSTR_L);
      /* Count valid chars */
      WS_NUM_COUNT_TOTAL = 0;
@@ -501,56 +503,57 @@
      END;
      IF WS_NUM_COUNT_MINUS > 0 THEN
        DO;
-         MESSAGEI = 'Please supply a positive amount.';
+         BNK1TFI_MAP.MESSAGEI = 'Please supply a positive amount.';
          VALID_DATA_SW = 'N';
-         AMTL = -1;
+         BNK1TFI_MAP.AMTL = -1;
          RETURN;
        END;
      IF WS_NUM_COUNT_SPACE > 0 THEN
        DO;
-         MESSAGEI =
+         BNK1TFI_MAP.MESSAGEI =
            'Please supply a numeric amount without embedded spaces.';
          VALID_DATA_SW = 'N';
-         AMTL = -1;
+         BNK1TFI_MAP.AMTL = -1;
          RETURN;
        END;
      IF WS_NUM_COUNT_TOTAL < WS_AMOUNT_UNSTR_L THEN
        DO;
-         MESSAGEI = 'Please supply a numeric amount.';
+         BNK1TFI_MAP.MESSAGEI = 'Please supply a numeric amount.';
          VALID_DATA_SW = 'N';
-         AMTL = -1;
+         BNK1TFI_MAP.AMTL = -1;
          RETURN;
        END;
      IF WS_NUM_COUNT_POINT > 1 THEN
        DO;
-         MESSAGEI = 'Use one decimal point for amount only.';
+         BNK1TFI_MAP.MESSAGEI =
+             'Use one decimal point for amount only.';
          VALID_DATA_SW = 'N';
-         AMTL = -1;
+         BNK1TFI_MAP.AMTL = -1;
          RETURN;
        END;
      ON ERROR BEGIN;
-       MESSAGEI = 'Please supply a valid numeric amount.';
+       BNK1TFI_MAP.MESSAGEI = 'Please supply a valid numeric amount.';
        VALID_DATA_SW = 'N';
-       AMTL = -1;
+       BNK1TFI_MAP.AMTL = -1;
        RETURN;
      END;
      WS_AMOUNT_FLOAT = FLOAT(
        SUBSTR(WS_AMOUNT_UNSTR,1,WS_AMOUNT_UNSTR_L));
      IF WS_AMOUNT_FLOAT <= 0 THEN
        DO;
-         MESSAGEI = 'Please supply a positive amount.';
+         BNK1TFI_MAP.MESSAGEI = 'Please supply a positive amount.';
          VALID_DATA_SW = 'N';
-         AMTL = -1;
+         BNK1TFI_MAP.AMTL = -1;
          RETURN;
        END;
      IF WS_AMOUNT_FLOAT = 0 THEN
        DO;
-         MESSAGEI = 'Please supply a non-zero amount.';
+         BNK1TFI_MAP.MESSAGEI = 'Please supply a non-zero amount.';
          VALID_DATA_SW = 'N';
-         AMTL = -1;
+         BNK1TFI_MAP.AMTL = -1;
          RETURN;
        END;
-     MESSAGEI = ' ';
+     BNK1TFI_MAP.MESSAGEI = ' ';
      VALID_DATA_SW = 'Y';
    END VALIDATE_AMOUNT;
 

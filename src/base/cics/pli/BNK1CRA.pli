@@ -25,8 +25,8 @@
    /*****************************************************************/
    /* BMS map                                                       */
    /*****************************************************************/
-   DCL 1 BNK1CDI_MAP,
    %INCLUDE BNK1CDM;
+   DCL 1 BNK1CDI_MAP LIKE BNK1CDM_TMPL;
 
    /*****************************************************************/
    /* AID key definitions                                           */
@@ -36,8 +36,8 @@
    /*****************************************************************/
    /* ABNDINFO include                                              */
    /*****************************************************************/
-   DCL 1 ABNDINFO_REC,
    %INCLUDE ABNDINFO;
+   DCL 1 ABNDINFO_REC LIKE ABNDINFO_TMPL;
 
    /*****************************************************************/
    /* Working storage                                               */
@@ -131,7 +131,7 @@
      WHEN(EIBCALEN = 0)
        DO;
          BNK1CDI_MAP = LOW(LENGTH(BNK1CDI_MAP));
-         ACCNOL = -1;
+         BNK1CDI_MAP.ACCNOL = -1;
          SEND_FLAG = 'E';
          CALL SEND_MAP;
        END;
@@ -162,8 +162,8 @@
      OTHERWISE
        DO;
          BNK1CDI_MAP = LOW(LENGTH(BNK1CDI_MAP));
-         MESSAGEI = 'Invalid key pressed.';
-         ACCNOL = 8;
+         BNK1CDI_MAP.MESSAGEI = 'Invalid key pressed.';
+         BNK1CDI_MAP.ACCNOL = 8;
          SEND_FLAG = 'A';
          CALL SEND_MAP;
        END;
@@ -237,26 +237,26 @@
    /*****************************************************************/
    EDIT_DATA: PROC;
      EXEC CICS BIF DEEDIT
-       FIELD(ACCNOI);
-     IF VERIFY(ACCNOI,'0123456789') ^= 0 THEN
+       FIELD(BNK1CDI_MAP.ACCNOI);
+     IF VERIFY(BNK1CDI_MAP.ACCNOI,'0123456789') ^= 0 THEN
        DO;
-         MESSAGEI =
+         BNK1CDI_MAP.MESSAGEI =
            'Please enter an account number.  ';
          VALID_DATA_SW = 'N';
          RETURN;
        END;
-     IF ACCNOI = '00000000' THEN
+     IF BNK1CDI_MAP.ACCNOI = '00000000' THEN
        DO;
-         MESSAGEI =
+         BNK1CDI_MAP.MESSAGEI =
            'Please enter a non zero account number.  ';
          VALID_DATA_SW = 'N';
          RETURN;
        END;
-     IF SIGNI ^= '+' &
-        SIGNI ^= '-' &
-        SIGNL  = 1 THEN
+     IF BNK1CDI_MAP.SIGNI ^= '+' &
+        BNK1CDI_MAP.SIGNI ^= '-' &
+        BNK1CDI_MAP.SIGNL  = 1 THEN
        DO;
-         MESSAGEI =
+         BNK1CDI_MAP.MESSAGEI =
            'Please enter + or - preceding the amount';
          VALID_DATA_SW = 'N';
          RETURN;
@@ -269,9 +269,9 @@
    /*****************************************************************/
    UPD_CRED_DATA: PROC;
      SUBPGM_PARMS = '';
-     SUBPGM_ACCNO = ACCNOI;
+     SUBPGM_ACCNO = BNK1CDI_MAP.ACCNOI;
      SUBPGM_AMT   = 0;
-     IF SIGNI = '-' THEN
+     IF BNK1CDI_MAP.SIGNI = '-' THEN
        WS_AMOUNT_FLOAT = WS_AMOUNT_FLOAT * -1;
      SUBPGM_AMT = WS_AMOUNT_FLOAT;
      EXEC CICS INQUIRE ASSOCIATION(EIBTASKN)
@@ -303,28 +303,28 @@
          VALID_DATA_SW = 'N';
          SELECT(SUBPGM_FAIL_CODE);
            WHEN('1')
-             MESSAGEI =
+             BNK1CDI_MAP.MESSAGEI =
                'Sorry but the ACCOUNT no was not found';
            WHEN('2')
-             MESSAGEI =
+             BNK1CDI_MAP.MESSAGEI =
                'Sorry but the AMOUNT could not be applied.';
            WHEN('3')
-             MESSAGEI =
+             BNK1CDI_MAP.MESSAGEI =
                'Sorry insufficient funds available.';
            OTHERWISE
-             MESSAGEI =
+             BNK1CDI_MAP.MESSAGEI =
                'Sorry but the AMOUNT could not be applied.';
          END;
        END;
      ELSE
-       MESSAGEI =
+       BNK1CDI_MAP.MESSAGEI =
          'Amount successfully applied to the account.';
-     ACCNOI  = SUBPGM_ACCNO;
-     SORTCI  = SUBPGM_SORTC;
+     BNK1CDI_MAP.ACCNOI  = SUBPGM_ACCNO;
+     BNK1CDI_MAP.SORTCI  = SUBPGM_SORTC;
      AVAIL_BAL_DISP  = SUBPGM_AV_BAL;
      ACTUAL_BAL_DISP = SUBPGM_ACT_BAL;
-     AVBALI  = AVAIL_BAL_DISP;
-     ACTBALI = ACTUAL_BAL_DISP;
+     BNK1CDI_MAP.AVBALI  = AVAIL_BAL_DISP;
+     BNK1CDI_MAP.ACTBALI = ACTUAL_BAL_DISP;
    END UPD_CRED_DATA;
 
    /*****************************************************************/
@@ -443,31 +443,31 @@
      DCL I FIXED BIN(31);
      DCL C CHAR(1);
      WS_AMOUNT_FLOAT = 0;
-     IF AMTL = 0 THEN
+     IF BNK1CDI_MAP.AMTL = 0 THEN
        DO;
-         MESSAGEI =
+         BNK1CDI_MAP.MESSAGEI =
            'The Amount entered must be numeric.';
          VALID_DATA_SW = 'N';
-         AMTL = -1;
+         BNK1CDI_MAP.AMTL = -1;
          RETURN;
        END;
      /* Strip leading spaces */
      WS_NUM_COUNT_TOTAL = 0;
-     DO I = 1 TO AMTL;
-       C = SUBSTR(AMTI,I,1);
+     DO I = 1 TO BNK1CDI_MAP.AMTL;
+       C = SUBSTR(BNK1CDI_MAP.AMTI,I,1);
        IF C = ' ' THEN WS_NUM_COUNT_TOTAL = WS_NUM_COUNT_TOTAL + 1;
        ELSE LEAVE;
      END;
-     IF WS_NUM_COUNT_TOTAL = AMTL THEN
+     IF WS_NUM_COUNT_TOTAL = BNK1CDI_MAP.AMTL THEN
        DO;
-         MESSAGEI =
+         BNK1CDI_MAP.MESSAGEI =
            'The Amount entered must be numeric.';
          VALID_DATA_SW = 'N';
-         AMTL = -1;
+         BNK1CDI_MAP.AMTL = -1;
          RETURN;
        END;
-     WS_AMOUNT_UNSTR_L = AMTL - WS_NUM_COUNT_TOTAL;
-     WS_AMOUNT_UNSTR = SUBSTR(AMTI,
+     WS_AMOUNT_UNSTR_L = BNK1CDI_MAP.AMTL - WS_NUM_COUNT_TOTAL;
+     WS_AMOUNT_UNSTR = SUBSTR(BNK1CDI_MAP.AMTI,
        WS_NUM_COUNT_TOTAL + 1, WS_AMOUNT_UNSTR_L);
      /* Count valid chars */
      WS_NUM_COUNT_TOTAL = 0;
@@ -487,46 +487,46 @@
      END;
      IF WS_NUM_COUNT_SPACE > 0 THEN
        DO;
-         MESSAGEI =
+         BNK1CDI_MAP.MESSAGEI =
            'Please supply a numeric amount without embedded spaces.';
          VALID_DATA_SW = 'N';
-         AMTL = -1;
+         BNK1CDI_MAP.AMTL = -1;
          RETURN;
        END;
      IF WS_NUM_COUNT_TOTAL < WS_AMOUNT_UNSTR_L THEN
        DO;
-         MESSAGEI =
+         BNK1CDI_MAP.MESSAGEI =
            'Please supply a numeric amount.';
          VALID_DATA_SW = 'N';
-         AMTL = -1;
+         BNK1CDI_MAP.AMTL = -1;
          RETURN;
        END;
      IF WS_NUM_COUNT_POINT > 1 THEN
        DO;
-         MESSAGEI =
+         BNK1CDI_MAP.MESSAGEI =
            'Use one decimal point for amount only.';
          VALID_DATA_SW = 'N';
-         AMTL = -1;
+         BNK1CDI_MAP.AMTL = -1;
          RETURN;
        END;
      ON ERROR BEGIN;
-       MESSAGEI =
+       BNK1CDI_MAP.MESSAGEI =
          'Please supply a valid numeric amount.';
        VALID_DATA_SW = 'N';
-       AMTL = -1;
+       BNK1CDI_MAP.AMTL = -1;
        RETURN;
      END;
      WS_AMOUNT_FLOAT = FLOAT(
        SUBSTR(WS_AMOUNT_UNSTR,1,WS_AMOUNT_UNSTR_L));
      IF WS_AMOUNT_FLOAT = 0 THEN
        DO;
-         MESSAGEI =
+         BNK1CDI_MAP.MESSAGEI =
            'Please supply a non-zero amount.';
          VALID_DATA_SW = 'N';
-         AMTL = -1;
+         BNK1CDI_MAP.AMTL = -1;
          RETURN;
        END;
-     MESSAGEI = ' ';
+     BNK1CDI_MAP.MESSAGEI = ' ';
      VALID_DATA_SW = 'Y';
    END VALIDATE_AMOUNT;
 

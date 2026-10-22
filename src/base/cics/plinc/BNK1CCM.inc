@@ -8,6 +8,9 @@
  /*         CUSTNO2, CREDSC, SCRDTDD, SCRDTMM, SCRDTYY,           */
  /*         MESSAGE, DUMMY                                         */
  /***************************************************************** */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE BNK1CCM_TMPL;                           */
+  DCL 1 BNK1CCM_TMPL BASED,
    3 BNK1CCI,
      5 CUSTTITL      FIXED BIN(15),
      5 CUSTTITA      CHAR(1),

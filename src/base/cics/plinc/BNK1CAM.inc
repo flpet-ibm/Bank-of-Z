@@ -6,6 +6,9 @@
  /* Each named field has L (length), A (attribute), I (input),   */
  /* and O (output) - I and O share storage via UNION.             */
  /***************************************************************** */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE BNK1CAM_TMPL;                           */
+  DCL 1 BNK1CAM_TMPL BASED,
    3 BNK1CAI,
      5 CUSTNOL      FIXED BIN(15),
      5 CUSTNOA      CHAR(1),

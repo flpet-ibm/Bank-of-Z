@@ -4,7 +4,9 @@
  /*                                                                */
  /* **************************************************************** */
  /* Converted from CUSTCTRL.cpy                                    */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE CUSTCTRL_TMPL;                          */
+  DCL 1 CUSTCTRL_TMPL BASED,
    3 CUSTOMER_CONTROL_RECORD,
      5 CUSTOMER_CONTROL_EYECATCHER    CHAR(4),
      5 CUSTOMER_CONTROL_KEY,

@@ -4,6 +4,8 @@
  /*                                                                */
  /* **************************************************************** */
  /* Converted from GETCOMPY.cpy                                    */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE GETCOMPY_TMPL;                          */
+  DCL 1 GETCOMPY_TMPL BASED,
    3 GETCOMPANYOPERATION,
      5 COMPANY_NAME               CHAR(40);

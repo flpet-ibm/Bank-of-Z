@@ -4,7 +4,9 @@
  /*                                                                */
  /* **************************************************************** */
  /* Converted from UPDACC.cpy - Update Account COMMAREA.           */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE UPDACC_TMPL;                            */
+  DCL 1 UPDACC_TMPL BASED,
    3 COMM_EYE                    CHAR(4),
    3 COMM_CUSTNO                 CHAR(10),
    3 COMM_SCODE                  CHAR(6),

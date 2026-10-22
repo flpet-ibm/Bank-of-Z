@@ -5,9 +5,10 @@
  /* **************************************************************** */
  /* Converted from INQACCSZ.cpy - Inquire Accounts (z/OS Connect). */
  /* Note: INQACCSZ.cpy defined its own 01-level (INQACCS).        */
- /* For PL/I include we strip the 01 level; declare in program.   */
  /* OCCURS DEPENDING ON converted to fixed (20) per COBOL max.    */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE INQACCSZ_TMPL;                          */
+  DCL 1 INQACCSZ_TMPL BASED,
    3 NUMBER_OF_ACCOUNTS           FIXED BIN(31),
    3 COMM_SUCCESS                 CHAR(1),
    3 COMM_FAIL_CODE               CHAR(1),

@@ -16,14 +16,14 @@
    /*****************************************************************/
    /* DFHCOMMAREA - update account commarea                        */
    /*****************************************************************/
-   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR),
    %INCLUDE UPDACC;
+   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR) LIKE UPDACC_TMPL;
 
    /*****************************************************************/
    /* BMS map                                                       */
    /*****************************************************************/
-   DCL 1 BNK1UAI_MAP,
    %INCLUDE BNK1UAM;
+   DCL 1 BNK1UAI_MAP LIKE BNK1UAM_TMPL;
 
    /*****************************************************************/
    /* AID key definitions                                           */
@@ -33,8 +33,8 @@
    /*****************************************************************/
    /* ABNDINFO                                                      */
    /*****************************************************************/
-   DCL 1 ABNDINFO_REC,
    %INCLUDE ABNDINFO;
+   DCL 1 ABNDINFO_REC LIKE ABNDINFO_TMPL;
 
    /*****************************************************************/
    /* Working storage                                               */
@@ -59,8 +59,7 @@
    DCL WS_ABEND_PGM    CHAR(8)  INIT('ABNDPROC');
 
    /* Working commarea copy - same structure as UPDACC.inc */
-   DCL 1 WS_COMM_AREA,
-   %INCLUDE UPDACC;
+   DCL 1 WS_COMM_AREA LIKE UPDACC_TMPL;
 
    /* Interest rate conversion */
    DCL INTRTI_FLOAT    FLOAT DEC(16) INIT(0);
@@ -130,7 +129,7 @@
      WHEN(EIBCALEN = 0)
        DO;
          BNK1UAI_MAP = LOW(LENGTH(BNK1UAI_MAP));
-         ACCNOL = -1;
+         BNK1UAI_MAP.ACCNOL = -1;
          SEND_FLAG = 'E';
          WS_COMM_AREA = '';
          CALL SEND_MAP;
@@ -164,8 +163,8 @@
      OTHERWISE
        DO;
          BNK1UAI_MAP = LOW(LENGTH(BNK1UAI_MAP));
-         MESSAGEI = 'Invalid key pressed.';
-         ACCNOL = -1;
+         BNK1UAI_MAP.MESSAGEI = 'Invalid key pressed.';
+         BNK1UAI_MAP.ACCNOL = -1;
          SEND_FLAG = 'A';
          CALL SEND_MAP;
        END;
@@ -269,9 +268,9 @@
    /* EDIT_DATA                                                     */
    /*****************************************************************/
    EDIT_DATA: PROC;
-     IF VERIFY(ACCNOI,'0123456789') ^= 0 THEN
+     IF VERIFY(BNK1UAI_MAP.ACCNOI,'0123456789') ^= 0 THEN
        DO;
-         MESSAGEI = 'Please enter an account number.';
+         BNK1UAI_MAP.MESSAGEI = 'Please enter an account number.';
          VALID_DATA_SW = 'N';
        END;
    END EDIT_DATA;
@@ -282,76 +281,86 @@
    VALIDATE_DATA: PROC;
      DCL I FIXED BIN(31);
      DCL C CHAR(1);
-     IF ACTYPI ^= 'CURRENT ' & ACTYPI ^= 'SAVING  ' &
-        ACTYPI ^= 'LOAN    ' & ACTYPI ^= 'MORTGAGE' &
-        ACTYPI ^= 'ISA     ' THEN
+     IF BNK1UAI_MAP.ACTYPI ^= 'CURRENT ' & BNK1UAI_MAP.ACTYPI ^=
+         'SAVING  ' &
+        BNK1UAI_MAP.ACTYPI ^= 'LOAN    ' & BNK1UAI_MAP.ACTYPI ^=
+            'MORTGAGE' &
+        BNK1UAI_MAP.ACTYPI ^= 'ISA     ' THEN
        DO;
-         MESSAGEI =
+         BNK1UAI_MAP.MESSAGEI =
            'Account Type must be CURRENT,SAVING,LOAN,MORTGAGE or ISA';
-         ACTYPL = -1;
+         BNK1UAI_MAP.ACTYPL = -1;
          VALID_DATA_SW = 'N';
        END;
-     IF INTRTL = 0 THEN
+     IF BNK1UAI_MAP.INTRTL = 0 THEN
        DO;
-         MESSAGEI = 'Please supply a numeric interest rate.';
+         BNK1UAI_MAP.MESSAGEI =
+             'Please supply a numeric interest rate.';
          VALID_DATA_SW = 'N';
-         INTRTL = -1;
+         BNK1UAI_MAP.INTRTL = -1;
          RETURN;
        END;
      ON ERROR BEGIN;
-       MESSAGEI = 'Please supply a numeric interest rate.';
+       BNK1UAI_MAP.MESSAGEI = 'Please supply a numeric interest rate.';
        VALID_DATA_SW = 'N';
-       INTRTL = -1;
+       BNK1UAI_MAP.INTRTL = -1;
        RETURN;
      END;
-     INTRTI_FLOAT = FLOAT(SUBSTR(INTRTI,1,INTRTL));
+     INTRTI_FLOAT =
+         FLOAT(SUBSTR(BNK1UAI_MAP.INTRTI,1,BNK1UAI_MAP.INTRTL));
      IF INTRTI_FLOAT < 0 THEN
        DO;
-         MESSAGEI = 'Please supply zero or positive interest rate.';
+         BNK1UAI_MAP.MESSAGEI =
+             'Please supply zero or positive interest rate.';
          VALID_DATA_SW = 'N';
-         INTRTL = -1;
+         BNK1UAI_MAP.INTRTL = -1;
          RETURN;
        END;
      IF INTRTI_FLOAT > 9999.99 THEN
        DO;
-         MESSAGEI = 'Please supply an interest rate less than 9999.99';
+         BNK1UAI_MAP.MESSAGEI =
+             'Please supply an interest rate less than 9999.99';
          VALID_DATA_SW = 'N';
-         INTRTL = -1;
+         BNK1UAI_MAP.INTRTL = -1;
          RETURN;
        END;
-     IF (ACTYPI = 'LOAN    ' & INTRTI = '0000.00') |
-        (ACTYPI = 'MORTGAGE' & INTRTI = '0000.00') THEN
+     IF (BNK1UAI_MAP.ACTYPI = 'LOAN    ' & BNK1UAI_MAP.INTRTI =
+         '0000.00') |
+        (BNK1UAI_MAP.ACTYPI = 'MORTGAGE' & BNK1UAI_MAP.INTRTI =
+            '0000.00') THEN
        DO;
-         MESSAGEI =
+         BNK1UAI_MAP.MESSAGEI =
            'Interest rate cannot be 0 with this account type.';
          VALID_DATA_SW = 'N';
-         INTRTL = -1;
+         BNK1UAI_MAP.INTRTL = -1;
          RETURN;
        END;
-     IF OVERDRL = 0 |
-        VERIFY(SUBSTR(OVERDRI,1,OVERDRL),'0123456789') ^= 0 THEN
+     IF BNK1UAI_MAP.OVERDRL = 0 |
+        VERIFY(SUBSTR(BNK1UAI_MAP.OVERDRI,1,
+                      BNK1UAI_MAP.OVERDRL),'0123456789')
+            ^= 0 THEN
        DO;
-         MESSAGEI =
+         BNK1UAI_MAP.MESSAGEI =
            'Overdraft must be numeric. Correct and press PF5.';
          VALID_DATA_SW = 'N';
-         OVERDRL = -1;
+         BNK1UAI_MAP.OVERDRL = -1;
          RETURN;
        END;
-     IF VERIFY(LSTMTDDI,'0123456789') ^= 0 |
-        VERIFY(LSTMTMMI,'0123456789') ^= 0 |
-        VERIFY(LSTMTYYI,'0123456789') ^= 0 THEN
+     IF VERIFY(BNK1UAI_MAP.LSTMTDDI,'0123456789') ^= 0 |
+        VERIFY(BNK1UAI_MAP.LSTMTMMI,'0123456789') ^= 0 |
+        VERIFY(BNK1UAI_MAP.LSTMTYYI,'0123456789') ^= 0 THEN
        DO;
-         MESSAGEI = 'Last statement date must be numeric.';
+         BNK1UAI_MAP.MESSAGEI = 'Last statement date must be numeric.';
          VALID_DATA_SW = 'N';
          RETURN;
        END;
-     WS_LSTMTDDI = FIXED(LSTMTDDI);
-     WS_LSTMTMMI = FIXED(LSTMTMMI);
-     WS_LSTMTYYI = FIXED(LSTMTYYI);
+     WS_LSTMTDDI = FIXED(BNK1UAI_MAP.LSTMTDDI);
+     WS_LSTMTMMI = FIXED(BNK1UAI_MAP.LSTMTMMI);
+     WS_LSTMTYYI = FIXED(BNK1UAI_MAP.LSTMTYYI);
      IF WS_LSTMTDDI > 31 | WS_LSTMTDDI = 0 |
         WS_LSTMTMMI > 12 | WS_LSTMTMMI = 0 THEN
        DO;
-         MESSAGEI = 'Incorrect date for LAST STATEMENT.';
+         BNK1UAI_MAP.MESSAGEI = 'Incorrect date for LAST STATEMENT.';
          VALID_DATA_SW = 'N';
        END;
      IF (WS_LSTMTDDI = 31 & WS_LSTMTMMI = 9) |
@@ -360,27 +369,27 @@
         (WS_LSTMTDDI = 31 & WS_LSTMTMMI = 11) |
         (WS_LSTMTDDI > 29 & WS_LSTMTMMI = 2) THEN
        DO;
-         MESSAGEI = 'Incorrect date for LAST STATEMENT.';
+         BNK1UAI_MAP.MESSAGEI = 'Incorrect date for LAST STATEMENT.';
          VALID_DATA_SW = 'N';
        END;
-     IF VERIFY(NSTMTDDI,'0123456789') ^= 0 |
-        VERIFY(NSTMTMMI,'0123456789') ^= 0 |
-        VERIFY(NSTMTYYI,'0123456789') ^= 0 THEN
+     IF VERIFY(BNK1UAI_MAP.NSTMTDDI,'0123456789') ^= 0 |
+        VERIFY(BNK1UAI_MAP.NSTMTMMI,'0123456789') ^= 0 |
+        VERIFY(BNK1UAI_MAP.NSTMTYYI,'0123456789') ^= 0 THEN
        DO;
-         MESSAGEI = 'Next statement date must be numeric.';
+         BNK1UAI_MAP.MESSAGEI = 'Next statement date must be numeric.';
          VALID_DATA_SW = 'N';
          RETURN;
        END;
-     WS_NSTMTDDI = FIXED(NSTMTDDI);
-     WS_NSTMTMMI = FIXED(NSTMTMMI);
-     WS_NSTMTYYI = FIXED(NSTMTYYI);
+     WS_NSTMTDDI = FIXED(BNK1UAI_MAP.NSTMTDDI);
+     WS_NSTMTMMI = FIXED(BNK1UAI_MAP.NSTMTMMI);
+     WS_NSTMTYYI = FIXED(BNK1UAI_MAP.NSTMTYYI);
      IF (WS_NSTMTDDI = 31 & WS_NSTMTMMI = 9) |
         (WS_NSTMTDDI = 31 & WS_NSTMTMMI = 4) |
         (WS_NSTMTDDI = 31 & WS_NSTMTMMI = 6) |
         (WS_NSTMTDDI = 31 & WS_NSTMTMMI = 11) |
         (WS_NSTMTDDI > 29 & WS_NSTMTMMI = 2) THEN
        DO;
-         MESSAGEI = 'Incorrect date for NEXT STATEMENT.';
+         BNK1UAI_MAP.MESSAGEI = 'Incorrect date for NEXT STATEMENT.';
          VALID_DATA_SW = 'N';
        END;
    END VALIDATE_DATA;
@@ -390,7 +399,7 @@
    /*****************************************************************/
    INQ_ACC_DATA: PROC;
      DFHCOMMAREA = '';
-     DFHCOMMAREA.COMM_ACCNO = ACCNOI;
+     DFHCOMMAREA.COMM_ACCNO = BNK1UAI_MAP.ACCNOI;
      DFHCOMMAREA.COMM_AVAIL_BAL  = 0;
      DFHCOMMAREA.COMM_ACTUAL_BAL = 0;
      EXEC CICS LINK PROGRAM('INQACC')
@@ -414,35 +423,36 @@
         DFHCOMMAREA.COMM_LAST_STMT_DT = '00000000' THEN
        DO;
          VALID_DATA_SW = 'N';
-         MESSAGEI = 'This account number could not be found';
-         ACCNOL = -1;
+         BNK1UAI_MAP.MESSAGEI =
+             'This account number could not be found';
+         BNK1UAI_MAP.ACCNOL = -1;
          RETURN;
        END;
-     MESSAGEI =
+     BNK1UAI_MAP.MESSAGEI =
        'Please amend fields and hit <pf5> to apply changes';
-     ACCNO2I  = DFHCOMMAREA.COMM_ACCNO;
-     CUSTNOI  = DFHCOMMAREA.COMM_CUSTNO;
-     SORTCI   = DFHCOMMAREA.COMM_SCODE;
-     ACTYPI   = DFHCOMMAREA.COMM_ACC_TYPE;
-     INTRTI   = DFHCOMMAREA.COMM_INT_RATE;
+     BNK1UAI_MAP.ACCNO2I  = DFHCOMMAREA.COMM_ACCNO;
+     BNK1UAI_MAP.CUSTNOI  = DFHCOMMAREA.COMM_CUSTNO;
+     BNK1UAI_MAP.SORTCI   = DFHCOMMAREA.COMM_SCODE;
+     BNK1UAI_MAP.ACTYPI   = DFHCOMMAREA.COMM_ACC_TYPE;
+     BNK1UAI_MAP.INTRTI   = DFHCOMMAREA.COMM_INT_RATE;
      WS_DATE_SPLIT = DFHCOMMAREA.COMM_OPENED;
-     OPENDDI  = WS_DATE_SPLIT_DD;
-     OPENMMI  = WS_DATE_SPLIT_MM;
-     OPENYYI  = WS_DATE_SPLIT_YY;
+     BNK1UAI_MAP.OPENDDI  = WS_DATE_SPLIT_DD;
+     BNK1UAI_MAP.OPENMMI  = WS_DATE_SPLIT_MM;
+     BNK1UAI_MAP.OPENYYI  = WS_DATE_SPLIT_YY;
      WS_DATE_SPLIT = DFHCOMMAREA.COMM_LAST_STMT_DT;
-     LSTMTDDI = WS_DATE_SPLIT_DD;
-     LSTMTMMI = WS_DATE_SPLIT_MM;
-     LSTMTYYI = WS_DATE_SPLIT_YY;
+     BNK1UAI_MAP.LSTMTDDI = WS_DATE_SPLIT_DD;
+     BNK1UAI_MAP.LSTMTMMI = WS_DATE_SPLIT_MM;
+     BNK1UAI_MAP.LSTMTYYI = WS_DATE_SPLIT_YY;
      WS_DATE_SPLIT = DFHCOMMAREA.COMM_NEXT_STMT_DT;
-     NSTMTDDI = WS_DATE_SPLIT_DD;
-     NSTMTMMI = WS_DATE_SPLIT_MM;
-     NSTMTYYI = WS_DATE_SPLIT_YY;
-     OVERDRI  = DFHCOMMAREA.COMM_OVERDRAFT;
+     BNK1UAI_MAP.NSTMTDDI = WS_DATE_SPLIT_DD;
+     BNK1UAI_MAP.NSTMTMMI = WS_DATE_SPLIT_MM;
+     BNK1UAI_MAP.NSTMTYYI = WS_DATE_SPLIT_YY;
+     BNK1UAI_MAP.OVERDRI  = DFHCOMMAREA.COMM_OVERDRAFT;
      AVAIL_BAL_DISP  = DFHCOMMAREA.COMM_AVAIL_BAL;
      ACTUAL_BAL_DISP = DFHCOMMAREA.COMM_ACTUAL_BAL;
-     AVBALI   = AVAIL_BAL_DISP;
-     ACTBALI  = ACTUAL_BAL_DISP;
-     ACCNOL   = -1;
+     BNK1UAI_MAP.AVBALI   = AVAIL_BAL_DISP;
+     BNK1UAI_MAP.ACTBALI  = ACTUAL_BAL_DISP;
+     BNK1UAI_MAP.ACCNOL   = -1;
    END INQ_ACC_DATA;
 
    /*****************************************************************/
@@ -450,39 +460,39 @@
    /*****************************************************************/
    UPD_ACC_DATA: PROC;
      DFHCOMMAREA = '';
-     DFHCOMMAREA.COMM_ACCNO = ACCNOI;
-     IF ACCNOI = '99999999' THEN
-       DFHCOMMAREA.COMM_ACCNO = ACCNO2I;
-     DFHCOMMAREA.COMM_CUSTNO    = CUSTNOI;
-     DFHCOMMAREA.COMM_SCODE     = SORTCI;
-     DFHCOMMAREA.COMM_ACC_TYPE  = ACTYPI;
+     DFHCOMMAREA.COMM_ACCNO = BNK1UAI_MAP.ACCNOI;
+     IF BNK1UAI_MAP.ACCNOI = '99999999' THEN
+       DFHCOMMAREA.COMM_ACCNO = BNK1UAI_MAP.ACCNO2I;
+     DFHCOMMAREA.COMM_CUSTNO    = BNK1UAI_MAP.CUSTNOI;
+     DFHCOMMAREA.COMM_SCODE     = BNK1UAI_MAP.SORTCI;
+     DFHCOMMAREA.COMM_ACC_TYPE  = BNK1UAI_MAP.ACTYPI;
      ON ERROR BEGIN;
        INTRTI_FLOAT = 0;
      END;
-     INTRTI_FLOAT = FLOAT(INTRTI);
+     INTRTI_FLOAT = FLOAT(BNK1UAI_MAP.INTRTI);
      DFHCOMMAREA.COMM_INT_RATE = INTRTI_FLOAT;
-     WS_DATE_SPLIT_DD = OPENDDI;
-     WS_DATE_SPLIT_MM = OPENMMI;
-     WS_DATE_SPLIT_YY = OPENYYI;
+     WS_DATE_SPLIT_DD = BNK1UAI_MAP.OPENDDI;
+     WS_DATE_SPLIT_MM = BNK1UAI_MAP.OPENMMI;
+     WS_DATE_SPLIT_YY = BNK1UAI_MAP.OPENYYI;
      DFHCOMMAREA.COMM_OPENED = WS_DATE_SPLIT;
      ON ERROR BEGIN;
        DFHCOMMAREA.COMM_OVERDRAFT = '00000000';
      END;
-     DFHCOMMAREA.COMM_OVERDRAFT = OVERDRI;
-     WS_DATE_SPLIT_DD = LSTMTDDI;
-     WS_DATE_SPLIT_MM = LSTMTMMI;
-     WS_DATE_SPLIT_YY = LSTMTYYI;
+     DFHCOMMAREA.COMM_OVERDRAFT = BNK1UAI_MAP.OVERDRI;
+     WS_DATE_SPLIT_DD = BNK1UAI_MAP.LSTMTDDI;
+     WS_DATE_SPLIT_MM = BNK1UAI_MAP.LSTMTMMI;
+     WS_DATE_SPLIT_YY = BNK1UAI_MAP.LSTMTYYI;
      DFHCOMMAREA.COMM_LAST_STMT_DT = WS_DATE_SPLIT;
-     WS_DATE_SPLIT_DD = NSTMTDDI;
-     WS_DATE_SPLIT_MM = NSTMTMMI;
-     WS_DATE_SPLIT_YY = NSTMTYYI;
+     WS_DATE_SPLIT_DD = BNK1UAI_MAP.NSTMTDDI;
+     WS_DATE_SPLIT_MM = BNK1UAI_MAP.NSTMTMMI;
+     WS_DATE_SPLIT_YY = BNK1UAI_MAP.NSTMTYYI;
      DFHCOMMAREA.COMM_NEXT_STMT_DT = WS_DATE_SPLIT;
      /* Parse available balance from display */
      WS_CONVERTED_VAL1 = 0;
      WS_CONVERTED_VAL2 = 0;
      WS_CONVERTED_VAL3 = 0;
      WS_CONVERTED_VAL4 = 0;
-     WS_CONVERT_PICX   = AVBALI;
+     WS_CONVERT_PICX   = BNK1UAI_MAP.AVBALI;
      WS_CONVERTED_VAL1 = FIXED(WS_CONVERT_REMAIN) / 100;
      WS_CONVERTED_VAL2 = FIXED(WS_CONVERT_DEC);
      WS_CONVERTED_VAL3 = WS_CONVERTED_VAL1 + WS_CONVERTED_VAL2;
@@ -491,7 +501,7 @@
      ELSE
        WS_CONVERTED_VAL4 = WS_CONVERTED_VAL3;
      DFHCOMMAREA.COMM_AVAIL_BAL = WS_CONVERTED_VAL4;
-     WS_CONVERT_PICX   = ACTBALI;
+     WS_CONVERT_PICX   = BNK1UAI_MAP.ACTBALI;
      WS_CONVERTED_VAL1 = FIXED(WS_CONVERT_REMAIN) / 100;
      WS_CONVERTED_VAL2 = FIXED(WS_CONVERT_DEC);
      WS_CONVERTED_VAL3 = WS_CONVERTED_VAL1 + WS_CONVERTED_VAL2;
@@ -521,32 +531,32 @@
      IF DFHCOMMAREA.COMM_SUCCESS = 'N' THEN
        DO;
          VALID_DATA_SW = 'N';
-         MESSAGEI = 'Update unsuccessful, try again later.';
+         BNK1UAI_MAP.MESSAGEI = 'Update unsuccessful, try again later.';
          RETURN;
        END;
-     MESSAGEI = 'Account update successfully applied.';
-     ACCNO2I  = DFHCOMMAREA.COMM_ACCNO;
-     CUSTNOI  = DFHCOMMAREA.COMM_CUSTNO;
-     SORTCI   = DFHCOMMAREA.COMM_SCODE;
-     ACTYPI   = DFHCOMMAREA.COMM_ACC_TYPE;
-     INTRTI   = DFHCOMMAREA.COMM_INT_RATE;
+     BNK1UAI_MAP.MESSAGEI = 'Account update successfully applied.';
+     BNK1UAI_MAP.ACCNO2I  = DFHCOMMAREA.COMM_ACCNO;
+     BNK1UAI_MAP.CUSTNOI  = DFHCOMMAREA.COMM_CUSTNO;
+     BNK1UAI_MAP.SORTCI   = DFHCOMMAREA.COMM_SCODE;
+     BNK1UAI_MAP.ACTYPI   = DFHCOMMAREA.COMM_ACC_TYPE;
+     BNK1UAI_MAP.INTRTI   = DFHCOMMAREA.COMM_INT_RATE;
      WS_DATE_SPLIT = DFHCOMMAREA.COMM_OPENED;
-     OPENDDI  = WS_DATE_SPLIT_DD;
-     OPENMMI  = WS_DATE_SPLIT_MM;
-     OPENYYI  = WS_DATE_SPLIT_YY;
+     BNK1UAI_MAP.OPENDDI  = WS_DATE_SPLIT_DD;
+     BNK1UAI_MAP.OPENMMI  = WS_DATE_SPLIT_MM;
+     BNK1UAI_MAP.OPENYYI  = WS_DATE_SPLIT_YY;
      WS_DATE_SPLIT = DFHCOMMAREA.COMM_LAST_STMT_DT;
-     LSTMTDDI = WS_DATE_SPLIT_DD;
-     LSTMTMMI = WS_DATE_SPLIT_MM;
-     LSTMTYYI = WS_DATE_SPLIT_YY;
+     BNK1UAI_MAP.LSTMTDDI = WS_DATE_SPLIT_DD;
+     BNK1UAI_MAP.LSTMTMMI = WS_DATE_SPLIT_MM;
+     BNK1UAI_MAP.LSTMTYYI = WS_DATE_SPLIT_YY;
      WS_DATE_SPLIT = DFHCOMMAREA.COMM_NEXT_STMT_DT;
-     NSTMTDDI = WS_DATE_SPLIT_DD;
-     NSTMTMMI = WS_DATE_SPLIT_MM;
-     NSTMTYYI = WS_DATE_SPLIT_YY;
-     OVERDRI  = DFHCOMMAREA.COMM_OVERDRAFT;
+     BNK1UAI_MAP.NSTMTDDI = WS_DATE_SPLIT_DD;
+     BNK1UAI_MAP.NSTMTMMI = WS_DATE_SPLIT_MM;
+     BNK1UAI_MAP.NSTMTYYI = WS_DATE_SPLIT_YY;
+     BNK1UAI_MAP.OVERDRI  = DFHCOMMAREA.COMM_OVERDRAFT;
      AVAIL_BAL_DISP  = DFHCOMMAREA.COMM_AVAIL_BAL;
      ACTUAL_BAL_DISP = DFHCOMMAREA.COMM_ACTUAL_BAL;
-     AVBALI  = AVAIL_BAL_DISP;
-     ACTBALI = ACTUAL_BAL_DISP;
+     BNK1UAI_MAP.AVBALI  = AVAIL_BAL_DISP;
+     BNK1UAI_MAP.ACTBALI = ACTUAL_BAL_DISP;
    END UPD_ACC_DATA;
 
    /*****************************************************************/

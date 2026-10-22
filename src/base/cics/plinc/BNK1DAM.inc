@@ -8,6 +8,9 @@
  /*         LSTMTYY, NSTMTDD, NSTMTMM, NSTMTYY, AVBAL, ACTBAL,   */
  /*         MESSAGE, DUMMY                                         */
  /***************************************************************** */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE BNK1DAM_TMPL;                           */
+  DCL 1 BNK1DAM_TMPL BASED,
    3 BNK1DAI,
      5 ACCNOL        FIXED BIN(15),
      5 ACCNOA        CHAR(1),

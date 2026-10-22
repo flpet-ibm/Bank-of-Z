@@ -5,7 +5,9 @@
  /* **************************************************************** */
  /* Converted from INQACCS.cpy - Inquire Accounts by Sortcode.     */
  /* OCCURS DEPENDING ON converted to fixed (20) per COBOL max.    */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE INQACCS_TMPL;                           */
+  DCL 1 INQACCS_TMPL BASED,
    3 NUMBER_OF_ACCOUNTS           FIXED BIN(31),
    3 COMM_SUCCESS                 CHAR(1),
    3 COMM_FAIL_CODE               CHAR(1),

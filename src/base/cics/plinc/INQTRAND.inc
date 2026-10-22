@@ -5,9 +5,10 @@
  /* **************************************************************** */
  /* Converted from INQTRAND.cpy - Inquire Transaction Detail.      */
  /* Note: INQTRAND.cpy defined its own 01-level.                   */
- /* For PL/I include we strip the 01 level; declare in program.   */
  /* 88-levels converted to comments showing valid values.         */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE INQTRAND_TMPL;                          */
+  DCL 1 INQTRAND_TMPL BASED,
    3 INQTRAND_EYE                CHAR(4),
                                   /* valid value: 'ITRD' */
    /* Input parameters (composite key) */

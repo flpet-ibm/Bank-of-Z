@@ -8,6 +8,9 @@
  /*         DOBDD, DOBMM, DOBYY, CREDSC, SCRDTDD, SCRDTMM,        */
  /*         SCRDTYY, MESSAGE, DUMMY                                */
  /***************************************************************** */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE BNK1DCM_TMPL;                           */
+  DCL 1 BNK1DCM_TMPL BASED,
    3 BNK1DCI,
      5 CUSTNOL       FIXED BIN(15),
      5 CUSTNOA       CHAR(1),

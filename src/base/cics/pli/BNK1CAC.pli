@@ -26,8 +26,8 @@
    /*****************************************************************/
    /* BMS symbolic map                                              */
    /*****************************************************************/
-   DCL 1 BNK1CAO,
    %INCLUDE BNK1CAM;
+   DCL 1 BNK1CAO LIKE BNK1CAM_TMPL;
 
    /*****************************************************************/
    /* AID key definitions                                           */
@@ -147,8 +147,8 @@
 
    DCL WS_ABEND_PGM CHAR(8) INIT('ABNDPROC');
 
-   DCL 1 ABNDINFO_REC,
    %INCLUDE ABNDINFO;
+   DCL 1 ABNDINFO_REC LIKE ABNDINFO_TMPL;
 
    /*****************************************************************/
    /* MAIN PROCEDURE                                                */
@@ -157,9 +157,9 @@
      WHEN (EIBCALEN = 0) DO;
        /* First time through - send blank map */
        BNK1CAO = LOW(LENGTH(BNK1CAO));
-       CUSTNOL = -1;
+       BNK1CAO.CUSTNOL = -1;
        SEND_FLAG = 'E';
-       MESSAGEI = ' ';
+       BNK1CAO.MESSAGEI = ' ';
        CALL SEND_MAP;
      END;
      WHEN (EIBAID = DFHPA1 | EIBAID = DFHPA2 | EIBAID = DFHPA3) DO;
@@ -190,8 +190,8 @@
      OTHERWISE DO;
        /* Invalid key */
        BNK1CAO = LOW(LENGTH(BNK1CAO));
-       MESSAGEI = ' ';
-       MESSAGEI = 'Invalid key pressed.';
+       BNK1CAO.MESSAGEI = ' ';
+       BNK1CAO.MESSAGEI = 'Invalid key pressed.';
        SEND_FLAG = 'A';
        CALL SEND_MAP;
      END;
@@ -263,69 +263,70 @@
    /*****************************************************************/
    EDIT_DATA: PROC;
      /* BIF DEEDIT on CUSTNO */
-     EXEC CICS BIF DEEDIT FIELD(CUSTNOI);
+     EXEC CICS BIF DEEDIT FIELD(BNK1CAO.CUSTNOI);
 
-     IF CUSTNOL < 1 | CUSTNOI = '__________' THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI =
+     IF BNK1CAO.CUSTNOL < 1 | BNK1CAO.CUSTNOI = '__________' THEN DO;
+       BNK1CAO.MESSAGEI = ' ';
+       BNK1CAO.MESSAGEI =
          'Please enter a 10 digit Customer Number ';
        VALID_DATA_SW = 'N';
-       CUSTNOL = -1;
+       BNK1CAO.CUSTNOL = -1;
        RETURN;
      END;
 
-     IF ^VERIFY(CUSTNOI,'0123456789') = 0 THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI = 'Please enter a numeric Customer number ';
+     IF ^VERIFY(BNK1CAO.CUSTNOI,'0123456789') = 0 THEN DO;
+       BNK1CAO.MESSAGEI = ' ';
+       BNK1CAO.MESSAGEI = 'Please enter a numeric Customer number ';
        VALID_DATA_SW = 'N';
-       CUSTNOL = -1;
+       BNK1CAO.CUSTNOL = -1;
        RETURN;
      END;
 
-     IF ACCTYPI = '________' | ACCTYPL < 1 THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI = 'Account Type should be ISA,CURRENT,LOAN,' ||
+     IF BNK1CAO.ACCTYPI = '________' | BNK1CAO.ACCTYPL < 1 THEN DO;
+       BNK1CAO.MESSAGEI = ' ';
+       BNK1CAO.MESSAGEI = 'Account Type should be ISA,CURRENT,LOAN,' ||
                   'SAVING or MORTGAGE';
        VALID_DATA_SW = 'N';
-       ACCTYPL = -1;
+       BNK1CAO.ACCTYPL = -1;
        RETURN;
      END;
 
-     MESSAGEI = ' ';
+     BNK1CAO.MESSAGEI = ' ';
 
-     IF ACCTYPL > 0 THEN DO;
+     IF BNK1CAO.ACCTYPL > 0 THEN DO;
        /* Normalise account type */
-       SELECT (TRANSLATE(ACCTYPI,'abcdefghijklmnopqrstuvwxyz',
+       SELECT (TRANSLATE(BNK1CAO.ACCTYPI,'abcdefghijklmnopqrstuvwxyz',
                                  'ABCDEFGHIJKLMNOPQRSTUVWXYZ'));
-         WHEN('ISA_____','ISA     ') ACCTYPI = 'ISA     ';
-         WHEN('CURRENT_','CURRENT ') ACCTYPI = 'CURRENT ';
-         WHEN('LOAN____','LOAN    ') ACCTYPI = 'LOAN    ';
-         WHEN('SAVING__','SAVING  ') ACCTYPI = 'SAVING  ';
-         WHEN('MORTGAGE')            ACCTYPI = 'MORTGAGE';
+         WHEN('ISA_____','ISA     ') BNK1CAO.ACCTYPI = 'ISA     ';
+         WHEN('CURRENT_','CURRENT ') BNK1CAO.ACCTYPI = 'CURRENT ';
+         WHEN('LOAN____','LOAN    ') BNK1CAO.ACCTYPI = 'LOAN    ';
+         WHEN('SAVING__','SAVING  ') BNK1CAO.ACCTYPI = 'SAVING  ';
+         WHEN('MORTGAGE')            BNK1CAO.ACCTYPI = 'MORTGAGE';
          OTHERWISE DO;
-           MESSAGEI = ' ';
-           MESSAGEI = 'Account Type should be ISA,CURRENT,LOAN,' ||
+           BNK1CAO.MESSAGEI = ' ';
+           BNK1CAO.MESSAGEI = 'Account Type should be ISA,CURRENT,LOAN,'
+               ||
                       'SAVING or MORTGAGE';
            VALID_DATA_SW = 'N';
-           ACCTYPL = -1;
+           BNK1CAO.ACCTYPL = -1;
            RETURN;
          END;
        END;
      END;
 
      /* Validate interest rate */
-     IF INTRTL = 0 THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI = 'Please supply a numeric interest rate';
+     IF BNK1CAO.INTRTL = 0 THEN DO;
+       BNK1CAO.MESSAGEI = ' ';
+       BNK1CAO.MESSAGEI = 'Please supply a numeric interest rate';
        VALID_DATA_SW = 'N';
-       INTRTL = -1;
+       BNK1CAO.INTRTL = -1;
        RETURN;
      END;
 
      /* Count valid numeric/decimal chars in interest field */
-     WS_INTRT_WORK = INTRTI;
+     WS_INTRT_WORK = BNK1CAO.INTRTI;
      WS_NUM_COUNT_TOTAL = 0;
-     DO WS_I = 1 TO INTRTL;
+     DO WS_I = 1 TO BNK1CAO.INTRTL;
        IF SUBSTR(WS_INTRT_WORK,WS_I,1) >= '0' &
           SUBSTR(WS_INTRT_WORK,WS_I,1) <= '9' |
           SUBSTR(WS_INTRT_WORK,WS_I,1) = '.' |
@@ -335,26 +336,27 @@
          WS_NUM_COUNT_TOTAL = WS_NUM_COUNT_TOTAL + 1;
      END;
 
-     IF WS_NUM_COUNT_TOTAL < INTRTL THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI = 'Please supply a numeric interest rate';
+     IF WS_NUM_COUNT_TOTAL < BNK1CAO.INTRTL THEN DO;
+       BNK1CAO.MESSAGEI = ' ';
+       BNK1CAO.MESSAGEI = 'Please supply a numeric interest rate';
        VALID_DATA_SW = 'N';
-       INTRTL = -1;
+       BNK1CAO.INTRTL = -1;
        RETURN;
      END;
 
      /* Count decimal points */
      WS_NUM_COUNT_POINT = 0;
-     DO WS_I = 1 TO INTRTL;
+     DO WS_I = 1 TO BNK1CAO.INTRTL;
        IF SUBSTR(WS_INTRT_WORK,WS_I,1) = '.' THEN
          WS_NUM_COUNT_POINT = WS_NUM_COUNT_POINT + 1;
      END;
 
      IF WS_NUM_COUNT_POINT > 1 THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI = 'Use one decimal point for interest rate only';
+       BNK1CAO.MESSAGEI = ' ';
+       BNK1CAO.MESSAGEI =
+           'Use one decimal point for interest rate only';
        VALID_DATA_SW = 'N';
-       INTRTL = -1;
+       BNK1CAO.INTRTL = -1;
        RETURN;
      END;
 
@@ -362,53 +364,53 @@
      INTRTI_COMP_1 = 0;
      BEGIN;
        ON ERROR GOTO INTRT_CONV_ERR;
-       INTRTI_COMP_1 = FLOAT(INTRTI);
+       INTRTI_COMP_1 = FLOAT(BNK1CAO.INTRTI);
        GOTO INTRT_CONV_OK;
      END;
      INTRT_CONV_ERR:
-       MESSAGEI = ' ';
-       MESSAGEI = 'Please supply a numeric interest rate';
+       BNK1CAO.MESSAGEI = ' ';
+       BNK1CAO.MESSAGEI = 'Please supply a numeric interest rate';
        VALID_DATA_SW = 'N';
-       INTRTL = -1;
+       BNK1CAO.INTRTL = -1;
        RETURN;
      INTRT_CONV_OK:
 
      IF INTRTI_COMP_1 < 0 THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI =
+       BNK1CAO.MESSAGEI = ' ';
+       BNK1CAO.MESSAGEI =
          'Please supply a zero or positive interest rate';
        VALID_DATA_SW = 'N';
-       INTRTL = -1;
+       BNK1CAO.INTRTL = -1;
        RETURN;
      END;
 
      IF INTRTI_COMP_1 > 9999.99 THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI =
+       BNK1CAO.MESSAGEI = ' ';
+       BNK1CAO.MESSAGEI =
          'Please supply an interest rate less than 9999.99%';
        VALID_DATA_SW = 'N';
-       INTRTL = -1;
+       BNK1CAO.INTRTL = -1;
        RETURN;
      END;
 
      /* Validate overdraft */
-     EXEC CICS BIF DEEDIT FIELD(OVERDRI);
+     EXEC CICS BIF DEEDIT FIELD(BNK1CAO.OVERDRI);
 
-     IF OVERDRL < 1 | OVERDRI = '________' |
-        OVERDRI = '        ' THEN
-       OVERDRI = '00000000';
+     IF BNK1CAO.OVERDRL < 1 | BNK1CAO.OVERDRI = '________' |
+        BNK1CAO.OVERDRI = '        ' THEN
+       BNK1CAO.OVERDRI = '00000000';
 
-     IF ^VERIFY(TRIM(OVERDRI),'0123456789') = 0 THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI = 'The Overdraft Limit must be numeric ';
+     IF ^VERIFY(TRIM(BNK1CAO.OVERDRI),'0123456789') = 0 THEN DO;
+       BNK1CAO.MESSAGEI = ' ';
+       BNK1CAO.MESSAGEI = 'The Overdraft Limit must be numeric ';
        VALID_DATA_SW = 'N';
-       OVERDRL = -1;
+       BNK1CAO.OVERDRL = -1;
        RETURN;
      END;
 
-     IF CUSTNOL < 1 | ACCTYPL < 1 THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI = 'Missing expected data.               ';
+     IF BNK1CAO.CUSTNOL < 1 | BNK1CAO.ACCTYPL < 1 THEN DO;
+       BNK1CAO.MESSAGEI = ' ';
+       BNK1CAO.MESSAGEI = 'Missing expected data.               ';
        VALID_DATA_SW = 'N';
        RETURN;
      END;
@@ -421,13 +423,13 @@
      SUBPGM_PARMS       = '';
      SUBPGM_EYECATCHER  = 'ACCT';
      SUBPGM_SUCCESS     = 'N';
-     SUBPGM_CUSTNO      = CUSTNOI;
+     SUBPGM_CUSTNO      = BNK1CAO.CUSTNOI;
      SUBPGM_SORTCODE    = '      ';
      SUBPGM_NUMBER      = '        ';
-     SUBPGM_ACC_TYPE    = ACCTYPI;
+     SUBPGM_ACC_TYPE    = BNK1CAO.ACCTYPI;
      SUBPGM_INT_RT      = INTRTI_COMP_1;
      SUBPGM_OPENED      = '00000000';
-     SUBPGM_OVERDR_LIM  = OVERDRI;
+     SUBPGM_OVERDR_LIM  = BNK1CAO.OVERDRI;
      SUBPGM_LAST_STMT_DT = '00000000';
      SUBPGM_NEXT_STMT_DT = '00000000';
      SUBPGM_AVAIL_BAL   = 0;
@@ -452,66 +454,66 @@
      END;
 
      IF SUBPGM_SUCCESS = 'N' THEN DO;
-       MESSAGEI = ' ';
+       BNK1CAO.MESSAGEI = ' ';
        VALID_DATA_SW = 'N';
        SELECT (SUBPGM_FAIL_CODE);
-         WHEN ('1') MESSAGEI =
+         WHEN ('1') BNK1CAO.MESSAGEI =
            'The supplied customer number does not exist.';
-         WHEN ('2') MESSAGEI =
+         WHEN ('2') BNK1CAO.MESSAGEI =
            'The customer data cannot be accessed, ' ||
            ' unable to create account.';
-         WHEN ('3') MESSAGEI =
+         WHEN ('3') BNK1CAO.MESSAGEI =
            'Account record creation failed.' ||
            ' (unable to ENQ ACCOUNT NC).';
-         WHEN ('4') MESSAGEI =
+         WHEN ('4') BNK1CAO.MESSAGEI =
            'Account record creation failed,' ||
            ' (unable to increment ACCOUNT NC).';
-         WHEN ('5') MESSAGEI =
+         WHEN ('5') BNK1CAO.MESSAGEI =
            'Account record creation failed,' ||
            ' (unable to restore ACCOUNT NC).';
-         WHEN ('6') MESSAGEI =
+         WHEN ('6') BNK1CAO.MESSAGEI =
            'Account record creation failed,' ||
            ' (unable to WRITE to ACCOUNT file).';
-         WHEN ('7') MESSAGEI =
+         WHEN ('7') BNK1CAO.MESSAGEI =
            'Account record creation failed,' ||
            ' (unable to INSERT into ACCOUNT).';
-         WHEN ('8') MESSAGEI =
+         WHEN ('8') BNK1CAO.MESSAGEI =
            'Account record creation failed,' ||
            ' (too many accounts).';
-         WHEN ('9') MESSAGEI =
+         WHEN ('9') BNK1CAO.MESSAGEI =
            'Account record creation failed, ' ||
            ' unable to count accounts.';
-         WHEN ('A') MESSAGEI =
+         WHEN ('A') BNK1CAO.MESSAGEI =
            'Account record creation failed, ' ||
            ' account type unsupported.';
-         OTHERWISE MESSAGEI = 'The account was not created.';
+         OTHERWISE BNK1CAO.MESSAGEI = 'The account was not created.';
        END;
      END;
      ELSE DO;
        /* Successful creation */
-       MESSAGEI = ' ';
-       MESSAGEI =
+       BNK1CAO.MESSAGEI = ' ';
+       BNK1CAO.MESSAGEI =
          'The Account has been successfully created';
-       SRTCDI   = SUBPGM_SORTCODE;
-       ACCNOI   = SUBPGM_NUMBER;
-       OPENDDI  = SUBSTR(SUBPGM_OPENED,1,2);
-       OPENMMI  = SUBSTR(SUBPGM_OPENED,3,2);
-       OPENYYI  = SUBSTR(SUBPGM_OPENED,5,4);
-       NSTMTDDI = SUBSTR(SUBPGM_NEXT_STMT_DT,1,2);
-       NSTMTMMI = SUBSTR(SUBPGM_NEXT_STMT_DT,3,2);
-       NSTMTYYI = SUBSTR(SUBPGM_NEXT_STMT_DT,5,4);
-       LSTMDDI  = SUBSTR(SUBPGM_LAST_STMT_DT,1,2);
-       LSTMMMI  = SUBSTR(SUBPGM_LAST_STMT_DT,3,2);
-       LSTMYYI  = SUBSTR(SUBPGM_LAST_STMT_DT,5,4);
-       AVAILS   = CHAR(SUBPGM_AVAIL_BAL);
-       ACTBALS  = CHAR(SUBPGM_ACT_BAL);
+       BNK1CAO.SRTCDI   = SUBPGM_SORTCODE;
+       BNK1CAO.ACCNOI   = SUBPGM_NUMBER;
+       BNK1CAO.OPENDDI  = SUBSTR(SUBPGM_OPENED,1,2);
+       BNK1CAO.OPENMMI  = SUBSTR(SUBPGM_OPENED,3,2);
+       BNK1CAO.OPENYYI  = SUBSTR(SUBPGM_OPENED,5,4);
+       BNK1CAO.NSTMTDDI = SUBSTR(SUBPGM_NEXT_STMT_DT,1,2);
+       BNK1CAO.NSTMTMMI = SUBSTR(SUBPGM_NEXT_STMT_DT,3,2);
+       BNK1CAO.NSTMTYYI = SUBSTR(SUBPGM_NEXT_STMT_DT,5,4);
+       BNK1CAO.LSTMDDI  = SUBSTR(SUBPGM_LAST_STMT_DT,1,2);
+       BNK1CAO.LSTMMMI  = SUBSTR(SUBPGM_LAST_STMT_DT,3,2);
+       BNK1CAO.LSTMYYI  = SUBSTR(SUBPGM_LAST_STMT_DT,5,4);
+       BNK1CAO.AVAILS   = CHAR(SUBPGM_AVAIL_BAL);
+       BNK1CAO.ACTBALS  = CHAR(SUBPGM_ACT_BAL);
      END;
 
-     CUSTNOI  = SUBPGM_CUSTNO;
-     ACCTYPI  = SUBPGM_ACC_TYPE;
+     BNK1CAO.CUSTNOI  = SUBPGM_CUSTNO;
+     BNK1CAO.ACCTYPI  = SUBPGM_ACC_TYPE;
      INTRT_PIC9 = CHAR(SUBPGM_INT_RT);
-     INTRTI   = INTRT_PIC9;
-     OVERDRI  = CHAR(SUBPGM_OVERDR_LIM);
+     BNK1CAO.INTRTI   = INTRT_PIC9;
+     BNK1CAO.OVERDRI  = CHAR(SUBPGM_OVERDR_LIM);
 
    END CRE_ACC_DATA;
 
@@ -623,20 +625,20 @@
    SETUP_ABND_INFO: PROC (P_MSG);
      DCL P_MSG CHAR(*);
      ABNDINFO_REC = '';
-     ABND_RESPCODE  = EIBRESP;
-     ABND_RESP2CODE = EIBRESP2;
-     EXEC CICS ASSIGN APPLID(ABND_APPLID);
-     ABND_TASKNO_KEY = EIBTASKN;
-     ABND_TRANID     = EIBTRNID;
+     ABNDINFO_REC.ABND_RESPCODE  = EIBRESP;
+     ABNDINFO_REC.ABND_RESP2CODE = EIBRESP2;
+     EXEC CICS ASSIGN APPLID(ABNDINFO_REC.ABND_APPLID);
+     ABNDINFO_REC.ABND_TASKNO_KEY = EIBTASKN;
+     ABNDINFO_REC.ABND_TRANID     = EIBTRNID;
      CALL POPULATE_TIME_DATE;
-     ABND_DATE = WS_ORIG_DATE;
-     ABND_TIME = WS_TIME_NOW_HH || ':' ||
+     ABNDINFO_REC.ABND_DATE = WS_ORIG_DATE;
+     ABNDINFO_REC.ABND_TIME = WS_TIME_NOW_HH || ':' ||
                  WS_TIME_NOW_MM || ':' || WS_TIME_NOW_SS;
-     ABND_UTIME_KEY = WS_U_TIME;
-     ABND_CODE = 'HBNK';
-     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM);
-     ABND_SQLCODE = '0';
-     ABND_FREEFORM = SUBSTR(P_MSG || ' EIBRESP=' ||
+     ABNDINFO_REC.ABND_UTIME_KEY = WS_U_TIME;
+     ABNDINFO_REC.ABND_CODE = 'HBNK';
+     EXEC CICS ASSIGN PROGRAM(ABNDINFO_REC.ABND_PROGRAM);
+     ABNDINFO_REC.ABND_SQLCODE = '0';
+     ABNDINFO_REC.ABND_FREEFORM = SUBSTR(P_MSG || ' EIBRESP=' ||
        CHAR(EIBRESP) || ' RESP2=' || CHAR(EIBRESP2),1,80);
      EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
                COMMAREA(ABNDINFO_REC);

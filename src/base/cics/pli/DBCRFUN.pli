@@ -16,8 +16,8 @@
    /*****************************************************************/
    /* DFHCOMMAREA (from PAYDBCR.cpy)                                */
    /*****************************************************************/
-   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR),
    %INCLUDE PAYDBCR;
+   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR) LIKE PAYDBCR_TMPL;
 
    /*****************************************************************/
    /* Sort code constant                                            */
@@ -91,8 +91,8 @@
    /*****************************************************************/
    /* ABNDINFO record                                               */
    /*****************************************************************/
-   DCL 1 ABNDINFO_REC,
    %INCLUDE ABNDINFO;
+   DCL 1 ABNDINFO_REC LIKE ABNDINFO_TMPL;
 
    /*****************************************************************/
    /* Date reformatter for PROCTRAN date (DD.MM.YYYY)              */
@@ -131,9 +131,9 @@
    /* MAIN PROCEDURE                                                */
    /*****************************************************************/
 
-   COMM_SUCCESS   = 'N';
-   COMM_FAIL_CODE = '0';
-   COMM_SORTC     = SORTCODE;
+   DFHCOMMAREA.COMM_SUCCESS   = 'N';
+   DFHCOMMAREA.COMM_FAIL_CODE = '0';
+   DFHCOMMAREA.COMM_SORTC     = SORTCODE;
 
    EXEC CICS HANDLE ABEND LABEL(ABEND_HANDLING);
 
@@ -147,7 +147,7 @@
    UPDATE_ACCOUNT_DB2: PROC;
 
      HV_ACCOUNT_SORTCODE = SORTCODE;
-     HV_ACCOUNT_ACC_NO   = COMM_ACCNO;
+     HV_ACCOUNT_ACC_NO   = DFHCOMMAREA.COMM_ACCNO;
 
      EXEC SQL
        SELECT ACCOUNT_EYECATCHER,
@@ -179,29 +179,29 @@
           AND ACCOUNT_NUMBER   = :HV_ACCOUNT_ACC_NO;
 
      IF SQLCODE ^= 0 THEN DO;
-       COMM_SUCCESS = 'N';
-       IF SQLCODE = 100 THEN COMM_FAIL_CODE = '1';
-       ELSE               COMM_FAIL_CODE = '2';
+       DFHCOMMAREA.COMM_SUCCESS = 'N';
+       IF SQLCODE = 100 THEN DFHCOMMAREA.COMM_FAIL_CODE = '1';
+       ELSE               DFHCOMMAREA.COMM_FAIL_CODE = '2';
        CALL CHECK_FOR_STORM_DRAIN_DB2;
        RETURN;
      END;
 
      /* Debit checks (negative amount = payment out) */
-     IF COMM_AMT < 0 THEN DO;
+     IF DFHCOMMAREA.COMM_AMT < 0 THEN DO;
        /* Reject MORTGAGE/LOAN debit via payment link (FACILTYPE=496) */
        IF (HV_ACCOUNT_ACC_TYPE = 'MORTGAGE' |
            HV_ACCOUNT_ACC_TYPE = 'LOAN    ') &
-          COMM_FACILTYPE = 496 THEN DO;
-         COMM_SUCCESS   = 'N';
-         COMM_FAIL_CODE = '4';
+          DFHCOMMAREA.COMM_FACILTYPE = 496 THEN DO;
+         DFHCOMMAREA.COMM_SUCCESS   = 'N';
+         DFHCOMMAREA.COMM_FAIL_CODE = '4';
          RETURN;
        END;
 
        /* Insufficient funds check (payment link only) */
-       WS_DIFFERENCE = HV_ACCOUNT_AVAIL_BAL + COMM_AMT;
-       IF WS_DIFFERENCE < 0 & COMM_FACILTYPE = 496 THEN DO;
-         COMM_SUCCESS   = 'N';
-         COMM_FAIL_CODE = '3';
+       WS_DIFFERENCE = HV_ACCOUNT_AVAIL_BAL + DFHCOMMAREA.COMM_AMT;
+       IF WS_DIFFERENCE < 0 & DFHCOMMAREA.COMM_FACILTYPE = 496 THEN DO;
+         DFHCOMMAREA.COMM_SUCCESS   = 'N';
+         DFHCOMMAREA.COMM_FAIL_CODE = '3';
          RETURN;
        END;
      END;
@@ -209,15 +209,16 @@
      /* Credit check - reject MORTGAGE/LOAN credit via payment link */
      IF (HV_ACCOUNT_ACC_TYPE = 'MORTGAGE' |
          HV_ACCOUNT_ACC_TYPE = 'LOAN    ') &
-        COMM_FACILTYPE = 496 THEN DO;
-       COMM_SUCCESS   = 'N';
-       COMM_FAIL_CODE = '4';
+        DFHCOMMAREA.COMM_FACILTYPE = 496 THEN DO;
+       DFHCOMMAREA.COMM_SUCCESS   = 'N';
+       DFHCOMMAREA.COMM_FAIL_CODE = '4';
        RETURN;
      END;
 
      /* Apply the amount */
-     HV_ACCOUNT_AVAIL_BAL  = HV_ACCOUNT_AVAIL_BAL  + COMM_AMT;
-     HV_ACCOUNT_ACTUAL_BAL = HV_ACCOUNT_ACTUAL_BAL + COMM_AMT;
+     HV_ACCOUNT_AVAIL_BAL = HV_ACCOUNT_AVAIL_BAL + DFHCOMMAREA.COMM_AMT;
+     HV_ACCOUNT_ACTUAL_BAL = HV_ACCOUNT_ACTUAL_BAL +
+         DFHCOMMAREA.COMM_AMT;
 
      EXEC SQL
        UPDATE ACCOUNT
@@ -236,12 +237,12 @@
         WHERE ACCOUNT_SORTCODE = :HV_ACCOUNT_SORTCODE
           AND ACCOUNT_NUMBER   = :HV_ACCOUNT_ACC_NO;
 
-     COMM_AV_BAL  = HV_ACCOUNT_AVAIL_BAL;
-     COMM_ACT_BAL = HV_ACCOUNT_ACTUAL_BAL;
+     DFHCOMMAREA.COMM_AV_BAL  = HV_ACCOUNT_AVAIL_BAL;
+     DFHCOMMAREA.COMM_ACT_BAL = HV_ACCOUNT_ACTUAL_BAL;
 
      IF SQLCODE ^= 0 THEN DO;
-       COMM_SUCCESS   = 'N';
-       COMM_FAIL_CODE = '2';
+       DFHCOMMAREA.COMM_SUCCESS   = 'N';
+       DFHCOMMAREA.COMM_FAIL_CODE = '2';
        CALL CHECK_FOR_STORM_DRAIN_DB2;
        RETURN;
      END;
@@ -260,8 +261,8 @@
      WS_EIBTASKN12     = CHAR(EIBTASKN);
 
      HV_PROCTRAN_EYECATCHER = 'PRTR';
-     HV_PROCTRAN_SORT_CODE  = COMM_SORTC;
-     HV_PROCTRAN_ACC_NUMBER = COMM_ACCNO;
+     HV_PROCTRAN_SORT_CODE  = DFHCOMMAREA.COMM_SORTC;
+     HV_PROCTRAN_ACC_NUMBER = DFHCOMMAREA.COMM_ACCNO;
      HV_PROCTRAN_REF        = WS_EIBTASKN12;
 
      EXEC CICS ASKTIME ABSTIME(WS_U_TIME);
@@ -279,32 +280,32 @@
 
      HV_PROCTRAN_DESC = ' ';
 
-     IF COMM_AMT < 0 THEN DO;
+     IF DFHCOMMAREA.COMM_AMT < 0 THEN DO;
        HV_PROCTRAN_TYPE = 'DEB';
        HV_PROCTRAN_DESC = 'COUNTER WTHDRW';
        /* Payment debit */
-       IF COMM_FACILTYPE = 496 THEN DO;
+       IF DFHCOMMAREA.COMM_FACILTYPE = 496 THEN DO;
          HV_PROCTRAN_TYPE = 'PDR';
-         IF COMM_DESCRIPTION ^= ' ' THEN
-           HV_PROCTRAN_DESC = COMM_DESCRIPTION;
+         IF DFHCOMMAREA.COMM_DESCRIPTION ^= ' ' THEN
+           HV_PROCTRAN_DESC = DFHCOMMAREA.COMM_DESCRIPTION;
          ELSE
-           HV_PROCTRAN_DESC = SUBSTR(COMM_ORIGIN, 1, 14);
+           HV_PROCTRAN_DESC = SUBSTR(DFHCOMMAREA.COMM_ORIGIN, 1, 14);
        END;
      END;
      ELSE DO;
        HV_PROCTRAN_TYPE = 'CRE';
        HV_PROCTRAN_DESC = 'COUNTER RECVED';
        /* Payment credit */
-       IF COMM_FACILTYPE = 496 THEN DO;
+       IF DFHCOMMAREA.COMM_FACILTYPE = 496 THEN DO;
          HV_PROCTRAN_TYPE = 'PCR';
-         IF COMM_DESCRIPTION ^= ' ' THEN
-           HV_PROCTRAN_DESC = COMM_DESCRIPTION;
+         IF DFHCOMMAREA.COMM_DESCRIPTION ^= ' ' THEN
+           HV_PROCTRAN_DESC = DFHCOMMAREA.COMM_DESCRIPTION;
          ELSE
-           HV_PROCTRAN_DESC = SUBSTR(COMM_ORIGIN, 1, 14);
+           HV_PROCTRAN_DESC = SUBSTR(DFHCOMMAREA.COMM_ORIGIN, 1, 14);
        END;
      END;
 
-     HV_PROCTRAN_AMOUNT = COMM_AMT;
+     HV_PROCTRAN_AMOUNT = DFHCOMMAREA.COMM_AMT;
 
      EXEC SQL
        INSERT INTO PROCTRAN
@@ -326,36 +327,36 @@
 
        IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
          ABNDINFO_REC   = '';
-         ABND_RESPCODE  = CHAR(EIBRESP);
-         ABND_RESP2CODE = CHAR(EIBRESP2);
-         ABND_SQLCODE   = '0';
-         EXEC CICS ASSIGN APPLID(ABND_APPLID);
-         ABND_TASKNO_KEY = EIBTASKN;
-         ABND_TRANID     = EIBTRNID;
+         ABNDINFO_REC.ABND_RESPCODE  = CHAR(EIBRESP);
+         ABNDINFO_REC.ABND_RESP2CODE = CHAR(EIBRESP2);
+         ABNDINFO_REC.ABND_SQLCODE   = '0';
+         EXEC CICS ASSIGN APPLID(ABNDINFO_REC.ABND_APPLID);
+         ABNDINFO_REC.ABND_TASKNO_KEY = EIBTASKN;
+         ABNDINFO_REC.ABND_TRANID     = EIBTRNID;
          CALL POPULATE_TIME_DATE;
-         ABND_DATE = WS_ORIG_DATE;
-         ABND_TIME = WS_TIME_NOW_GRP_HH || ':' ||
+         ABNDINFO_REC.ABND_DATE = WS_ORIG_DATE;
+         ABNDINFO_REC.ABND_TIME = WS_TIME_NOW_GRP_HH || ':' ||
                      WS_TIME_NOW_GRP_MM || ':' ||
                      WS_TIME_NOW_GRP_SS;
-         ABND_UTIME_KEY = WS_U_TIME;
-         ABND_CODE      = 'HROL';
-         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM);
-         ABND_FREEFORM =
+         ABNDINFO_REC.ABND_UTIME_KEY = WS_U_TIME;
+         ABNDINFO_REC.ABND_CODE      = 'HROL';
+         EXEC CICS ASSIGN PROGRAM(ABNDINFO_REC.ABND_PROGRAM);
+         ABNDINFO_REC.ABND_FREEFORM =
            'WTPD010 - Could not ROLLBACK. Data integrity issue.' ||
-           ' EIBRESP=' || ABND_RESPCODE ||
-           ' RESP2=' || ABND_RESP2CODE;
+           ' EIBRESP=' || ABNDINFO_REC.ABND_RESPCODE ||
+           ' RESP2=' || ABNDINFO_REC.ABND_RESP2CODE;
          EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
                    COMMAREA(ABNDINFO_REC);
          EXEC CICS ABEND ABCODE('HROL') CANCEL;
        END;
 
-       COMM_SUCCESS   = 'N';
-       COMM_FAIL_CODE = '2';
+       DFHCOMMAREA.COMM_SUCCESS   = 'N';
+       DFHCOMMAREA.COMM_FAIL_CODE = '2';
        CALL CHECK_FOR_STORM_DRAIN_DB2;
      END;
      ELSE DO;
-       COMM_SUCCESS   = 'Y';
-       COMM_FAIL_CODE = '0';
+       DFHCOMMAREA.COMM_SUCCESS   = 'Y';
+       DFHCOMMAREA.COMM_FAIL_CODE = '0';
      END;
 
    END WRITE_TO_PROCTRAN_DB2;
@@ -395,30 +396,30 @@
                    RESP2(WS_CICS_RESP2);
          IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
            ABNDINFO_REC   = '';
-           ABND_RESPCODE  = CHAR(EIBRESP);
-           ABND_RESP2CODE = CHAR(EIBRESP2);
-           ABND_SQLCODE   = '0';
-           EXEC CICS ASSIGN APPLID(ABND_APPLID);
-           ABND_TASKNO_KEY = EIBTASKN;
-           ABND_TRANID     = EIBTRNID;
+           ABNDINFO_REC.ABND_RESPCODE  = CHAR(EIBRESP);
+           ABNDINFO_REC.ABND_RESP2CODE = CHAR(EIBRESP2);
+           ABNDINFO_REC.ABND_SQLCODE   = '0';
+           EXEC CICS ASSIGN APPLID(ABNDINFO_REC.ABND_APPLID);
+           ABNDINFO_REC.ABND_TASKNO_KEY = EIBTASKN;
+           ABNDINFO_REC.ABND_TRANID     = EIBTRNID;
            CALL POPULATE_TIME_DATE;
-           ABND_DATE = WS_ORIG_DATE;
-           ABND_TIME = WS_TIME_NOW_GRP_HH || ':' ||
+           ABNDINFO_REC.ABND_DATE = WS_ORIG_DATE;
+           ABNDINFO_REC.ABND_TIME = WS_TIME_NOW_GRP_HH || ':' ||
                        WS_TIME_NOW_GRP_MM || ':' ||
                        WS_TIME_NOW_GRP_SS;
-           ABND_UTIME_KEY = WS_U_TIME;
-           ABND_CODE      = 'HROL';
-           EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM);
-           ABND_FREEFORM =
+           ABNDINFO_REC.ABND_UTIME_KEY = WS_U_TIME;
+           ABNDINFO_REC.ABND_CODE      = 'HROL';
+           EXEC CICS ASSIGN PROGRAM(ABNDINFO_REC.ABND_PROGRAM);
+           ABNDINFO_REC.ABND_FREEFORM =
              'AH010 - Cannot SYNCPOINT ROLLBACK after VSAM RLS' ||
-             ' EIBRESP=' || ABND_RESPCODE ||
-             ' RESP2=' || ABND_RESP2CODE;
+             ' EIBRESP=' || ABNDINFO_REC.ABND_RESPCODE ||
+             ' RESP2=' || ABNDINFO_REC.ABND_RESP2CODE;
            EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
                      COMMAREA(ABNDINFO_REC);
            EXEC CICS ABEND ABCODE('HROL') CANCEL;
          END;
-         COMM_SUCCESS   = 'N';
-         COMM_FAIL_CODE = '2';
+         DFHCOMMAREA.COMM_SUCCESS   = 'N';
+         DFHCOMMAREA.COMM_FAIL_CODE = '2';
          EXEC CICS RETURN;
        END;
        OTHERWISE;

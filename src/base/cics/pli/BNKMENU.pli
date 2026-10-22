@@ -17,8 +17,8 @@
    /*****************************************************************/
    /* BMS symbolic map                                              */
    /*****************************************************************/
-   DCL 1 BNK1MEO,
    %INCLUDE BNK1MAI;
+   DCL 1 BNK1MEO LIKE BNK1MAI_TMPL;
 
    /*****************************************************************/
    /* AID key definitions                                           */
@@ -73,8 +73,8 @@
 
    DCL WS_ABEND_PGM CHAR(8) INIT('ABNDPROC');
 
-   DCL 1 ABNDINFO_REC,
    %INCLUDE ABNDINFO;
+   DCL 1 ABNDINFO_REC LIKE ABNDINFO_TMPL;
 
    /*****************************************************************/
    /* MAIN PROCEDURE                                                */
@@ -82,7 +82,7 @@
    SELECT;
      WHEN (EIBCALEN = 0) DO;
        BNK1MEO = LOW(LENGTH(BNK1MEO));
-       ACTIONL = -1;
+       BNK1MEO.ACTIONL = -1;
        SEND_FLAG = 'E';
        CALL SEND_MAP;
      END;
@@ -103,8 +103,8 @@
      END;
      OTHERWISE DO;
        BNK1MEO = LOW(LENGTH(BNK1MEO));
-       MESSAGEI = 'Invalid key pressed.';
-       ACTIONL = -1;
+       BNK1MEO.MESSAGEI = 'Invalid key pressed.';
+       BNK1MEO.ACTIONL = -1;
        SEND_FLAG = 'A';
        CALL SEND_MAP;
      END;
@@ -153,7 +153,7 @@
      IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
        IF WS_CICS_RESP = DFHRESP(MAPFAIL) THEN DO;
          BNK1MEO = LOW(LENGTH(BNK1MEO));
-         ACTIONL = -1;
+         BNK1MEO.ACTIONL = -1;
          SEND_FLAG = 'E';
          CALL SEND_MAP;
        END;
@@ -173,17 +173,17 @@
    /* EDIT_MENU_DATA - validate action key                         */
    /*****************************************************************/
    EDIT_MENU_DATA: PROC;
-     IF ACTIONI ^= '1' & ACTIONI ^= '2' &
-        ACTIONI ^= '3' & ACTIONI ^= '4' &
-        ACTIONI ^= '5' & ACTIONI ^= '6' &
-        ACTIONI ^= '7' & ACTIONI ^= 'A' THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI =
+     IF BNK1MEO.ACTIONI ^= '1' & BNK1MEO.ACTIONI ^= '2' &
+        BNK1MEO.ACTIONI ^= '3' & BNK1MEO.ACTIONI ^= '4' &
+        BNK1MEO.ACTIONI ^= '5' & BNK1MEO.ACTIONI ^= '6' &
+        BNK1MEO.ACTIONI ^= '7' & BNK1MEO.ACTIONI ^= 'A' THEN DO;
+       BNK1MEO.MESSAGEI = ' ';
+       BNK1MEO.MESSAGEI =
          'You must enter a valid value (1-7 or A).';
        VALID_DATA_SW = 'N';
      END;
      ELSE
-       ACTION_CHAR = ACTIONI;
+       ACTION_CHAR = BNK1MEO.ACTIONI;
    END EDIT_MENU_DATA;
 
    /*****************************************************************/
@@ -359,20 +359,20 @@
    SETUP_ABND_INFO: PROC (P_MSG);
      DCL P_MSG CHAR(*);
      ABNDINFO_REC = '';
-     ABND_RESPCODE  = EIBRESP;
-     ABND_RESP2CODE = EIBRESP2;
-     EXEC CICS ASSIGN APPLID(ABND_APPLID);
-     ABND_TASKNO_KEY = EIBTASKN;
-     ABND_TRANID     = EIBTRNID;
+     ABNDINFO_REC.ABND_RESPCODE  = EIBRESP;
+     ABNDINFO_REC.ABND_RESP2CODE = EIBRESP2;
+     EXEC CICS ASSIGN APPLID(ABNDINFO_REC.ABND_APPLID);
+     ABNDINFO_REC.ABND_TASKNO_KEY = EIBTASKN;
+     ABNDINFO_REC.ABND_TRANID     = EIBTRNID;
      CALL POPULATE_TIME_DATE;
-     ABND_DATE = WS_ORIG_DATE;
-     ABND_TIME = WS_TIME_NOW_HH || ':' ||
+     ABNDINFO_REC.ABND_DATE = WS_ORIG_DATE;
+     ABNDINFO_REC.ABND_TIME = WS_TIME_NOW_HH || ':' ||
                  WS_TIME_NOW_MM || ':' || WS_TIME_NOW_SS;
-     ABND_UTIME_KEY = WS_U_TIME;
-     ABND_CODE = 'HBNK';
-     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM);
-     ABND_SQLCODE = '0';
-     ABND_FREEFORM = SUBSTR(P_MSG || ' EIBRESP=' ||
+     ABNDINFO_REC.ABND_UTIME_KEY = WS_U_TIME;
+     ABNDINFO_REC.ABND_CODE = 'HBNK';
+     EXEC CICS ASSIGN PROGRAM(ABNDINFO_REC.ABND_PROGRAM);
+     ABNDINFO_REC.ABND_SQLCODE = '0';
+     ABNDINFO_REC.ABND_FREEFORM = SUBSTR(P_MSG || ' EIBRESP=' ||
        CHAR(EIBRESP) || ' RESP2=' || CHAR(EIBRESP2),1,80);
      EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
                COMMAREA(ABNDINFO_REC);

@@ -158,8 +158,8 @@
    /***************************************************************** */
    /* PROCTRAN working area (from PROCTRAN.cpy)                       */
    /***************************************************************** */
-   DCL 1 PROCTRAN_AREA,
    %INCLUDE PROCTRAN;
+   DCL 1 PROCTRAN_AREA LIKE PROCTRAN_TMPL;
 
    /***************************************************************** */
    /* CICS response codes                                             */
@@ -351,8 +351,8 @@
    /***************************************************************** */
    /* ABEND information record (from ABNDINFO.cpy)                   */
    /***************************************************************** */
-   DCL 1 ABNDINFO_REC,
    %INCLUDE ABNDINFO;
+   DCL 1 ABNDINFO_REC LIKE ABNDINFO_TMPL;
 
    DCL WS_ERROR                   CHAR(40) INIT((40)'#');
 
@@ -365,14 +365,14 @@
    /***************************************************************** */
    /* OUTPUT-DATA - Account record (from ACCOUNT.cpy)                */
    /***************************************************************** */
-   DCL 1 OUTPUT_DATA,
    %INCLUDE ACCOUNT;
+   DCL 1 OUTPUT_DATA LIKE ACCOUNT_TMPL;
 
    /***************************************************************** */
    /* OUTPUTC-DATA - Customer record (from CUSTOMER.cpy)             */
    /***************************************************************** */
-   DCL 1 OUTPUTC_DATA,
    %INCLUDE CUSTOMER;
+   DCL 1 OUTPUTC_DATA LIKE CUSTOMER_TMPL;
 
    /***************************************************************** */
    /* RETURN-DATA                                                     */
@@ -560,31 +560,31 @@
       DO;
          SQLCODE_DISPLAY = SQLCODE;
          ABNDINFO_REC    = '';
-         ABND_RESPCODE   = EIBRESP;
-         ABND_RESP2CODE  = EIBRESP2;
+         ABNDINFO_REC.ABND_RESPCODE   = EIBRESP;
+         ABNDINFO_REC.ABND_RESP2CODE  = EIBRESP2;
 
-         EXEC CICS ASSIGN APPLID(ABND_APPLID);
+         EXEC CICS ASSIGN APPLID(ABNDINFO_REC.ABND_APPLID);
 
-         ABND_TASKNO_KEY = EIBTASKN;
-         ABND_TRANID     = EIBTRNID;
+         ABNDINFO_REC.ABND_TASKNO_KEY = EIBTASKN;
+         ABNDINFO_REC.ABND_TRANID     = EIBTRNID;
 
          CALL POPULATE_TIME_DATE2;
 
-         ABND_DATE = WS_ORIG_DATE;
-         ABND_TIME = WS_TIME_NOW_GRP_HH || ':' ||
+         ABNDINFO_REC.ABND_DATE = WS_ORIG_DATE;
+         ABNDINFO_REC.ABND_TIME = WS_TIME_NOW_GRP_HH || ':' ||
                      WS_TIME_NOW_GRP_MM || ':' ||
                      WS_TIME_NOW_GRP_SS;
-         ABND_UTIME_KEY = WS_U_TIME;
-         ABND_CODE      = 'HNCS';
+         ABNDINFO_REC.ABND_UTIME_KEY = WS_U_TIME;
+         ABNDINFO_REC.ABND_CODE      = 'HNCS';
 
-         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM);
+         EXEC CICS ASSIGN PROGRAM(ABNDINFO_REC.ABND_PROGRAM);
 
-         ABND_SQLCODE  = SQLCODE_DISPLAY;
-         ABND_FREEFORM = 'FNAND010 - ACCOUNT NCS ' ||
+         ABNDINFO_REC.ABND_SQLCODE  = SQLCODE_DISPLAY;
+         ABNDINFO_REC.ABND_FREEFORM = 'FNAND010 - ACCOUNT NCS ' ||
                          NCS_ACC_NO_NAME ||
                         ' Cannot be accessed and DB2 SELECT failed.' ||
-                         ' EIBRESP=' || ABND_RESPCODE ||
-                         ' RESP2=' || ABND_RESP2CODE;
+                         ' EIBRESP=' || ABNDINFO_REC.ABND_RESPCODE ||
+                         ' RESP2=' || ABNDINFO_REC.ABND_RESP2CODE;
 
          EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
               COMMAREA(ABNDINFO_REC);
@@ -622,31 +622,31 @@
          DO;
             SQLCODE_DISPLAY = SQLCODE;
             ABNDINFO_REC    = '';
-            ABND_RESPCODE   = EIBRESP;
-            ABND_RESP2CODE  = EIBRESP2;
+            ABNDINFO_REC.ABND_RESPCODE   = EIBRESP;
+            ABNDINFO_REC.ABND_RESP2CODE  = EIBRESP2;
 
-            EXEC CICS ASSIGN APPLID(ABND_APPLID);
+            EXEC CICS ASSIGN APPLID(ABNDINFO_REC.ABND_APPLID);
 
-            ABND_TASKNO_KEY = EIBTASKN;
-            ABND_TRANID     = EIBTRNID;
+            ABNDINFO_REC.ABND_TASKNO_KEY = EIBTASKN;
+            ABNDINFO_REC.ABND_TRANID     = EIBTRNID;
 
             CALL POPULATE_TIME_DATE2;
 
-            ABND_DATE = WS_ORIG_DATE;
-            ABND_TIME = WS_TIME_NOW_GRP_HH || ':' ||
+            ABNDINFO_REC.ABND_DATE = WS_ORIG_DATE;
+            ABNDINFO_REC.ABND_TIME = WS_TIME_NOW_GRP_HH || ':' ||
                         WS_TIME_NOW_GRP_MM || ':' ||
                         WS_TIME_NOW_GRP_SS;
-            ABND_UTIME_KEY = WS_U_TIME;
-            ABND_CODE      = 'HNCS';
+            ABNDINFO_REC.ABND_UTIME_KEY = WS_U_TIME;
+            ABNDINFO_REC.ABND_CODE      = 'HNCS';
 
-            EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM);
+            EXEC CICS ASSIGN PROGRAM(ABNDINFO_REC.ABND_PROGRAM);
 
-            ABND_SQLCODE  = SQLCODE_DISPLAY;
-            ABND_FREEFORM = 'FNAND010(2) - ACCOUNT NCS ' ||
+            ABNDINFO_REC.ABND_SQLCODE  = SQLCODE_DISPLAY;
+            ABNDINFO_REC.ABND_FREEFORM = 'FNAND010(2) - ACCOUNT NCS ' ||
                             NCS_ACC_NO_NAME ||
                         ' Cannot be accessed and DB2 UPDATE failed.' ||
-                            ' EIBRESP=' || ABND_RESPCODE ||
-                            ' RESP2=' || ABND_RESP2CODE;
+                            ' EIBRESP=' || ABNDINFO_REC.ABND_RESPCODE ||
+                            ' RESP2=' || ABNDINFO_REC.ABND_RESP2CODE;
 
             EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
                  COMMAREA(ABNDINFO_REC);
@@ -690,31 +690,31 @@
       DO;
          SQLCODE_DISPLAY = SQLCODE;
          ABNDINFO_REC    = '';
-         ABND_RESPCODE   = EIBRESP;
-         ABND_RESP2CODE  = EIBRESP2;
+         ABNDINFO_REC.ABND_RESPCODE   = EIBRESP;
+         ABNDINFO_REC.ABND_RESP2CODE  = EIBRESP2;
 
-         EXEC CICS ASSIGN APPLID(ABND_APPLID);
+         EXEC CICS ASSIGN APPLID(ABNDINFO_REC.ABND_APPLID);
 
-         ABND_TASKNO_KEY = EIBTASKN;
-         ABND_TRANID     = EIBTRNID;
+         ABNDINFO_REC.ABND_TASKNO_KEY = EIBTASKN;
+         ABNDINFO_REC.ABND_TRANID     = EIBTRNID;
 
          CALL POPULATE_TIME_DATE2;
 
-         ABND_DATE = WS_ORIG_DATE;
-         ABND_TIME = WS_TIME_NOW_GRP_HH || ':' ||
+         ABNDINFO_REC.ABND_DATE = WS_ORIG_DATE;
+         ABNDINFO_REC.ABND_TIME = WS_TIME_NOW_GRP_HH || ':' ||
                      WS_TIME_NOW_GRP_MM || ':' ||
                      WS_TIME_NOW_GRP_SS;
-         ABND_UTIME_KEY = WS_U_TIME;
-         ABND_CODE      = 'HNCS';
+         ABNDINFO_REC.ABND_UTIME_KEY = WS_U_TIME;
+         ABNDINFO_REC.ABND_CODE      = 'HNCS';
 
-         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM);
+         EXEC CICS ASSIGN PROGRAM(ABNDINFO_REC.ABND_PROGRAM);
 
-         ABND_SQLCODE  = SQLCODE_DISPLAY;
-         ABND_FREEFORM = 'FNAND010(3) - ACCOUNT NCS ' ||
+         ABNDINFO_REC.ABND_SQLCODE  = SQLCODE_DISPLAY;
+         ABNDINFO_REC.ABND_FREEFORM = 'FNAND010(3) - ACCOUNT NCS ' ||
                          NCS_ACC_NO_NAME ||
                          ' Cannot be accessed and DB2 SELECT failed.' ||
-                         ' EIBRESP=' || ABND_RESPCODE ||
-                         ' RESP2=' || ABND_RESP2CODE;
+                         ' EIBRESP=' || ABNDINFO_REC.ABND_RESPCODE ||
+                         ' RESP2=' || ABNDINFO_REC.ABND_RESP2CODE;
 
          EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
               COMMAREA(ABNDINFO_REC);
@@ -747,31 +747,31 @@
          DO;
             SQLCODE_DISPLAY = SQLCODE;
             ABNDINFO_REC    = '';
-            ABND_RESPCODE   = EIBRESP;
-            ABND_RESP2CODE  = EIBRESP2;
+            ABNDINFO_REC.ABND_RESPCODE   = EIBRESP;
+            ABNDINFO_REC.ABND_RESP2CODE  = EIBRESP2;
 
-            EXEC CICS ASSIGN APPLID(ABND_APPLID);
+            EXEC CICS ASSIGN APPLID(ABNDINFO_REC.ABND_APPLID);
 
-            ABND_TASKNO_KEY = EIBTASKN;
-            ABND_TRANID     = EIBTRNID;
+            ABNDINFO_REC.ABND_TASKNO_KEY = EIBTASKN;
+            ABNDINFO_REC.ABND_TRANID     = EIBTRNID;
 
             CALL POPULATE_TIME_DATE2;
 
-            ABND_DATE = WS_ORIG_DATE;
-            ABND_TIME = WS_TIME_NOW_GRP_HH || ':' ||
+            ABNDINFO_REC.ABND_DATE = WS_ORIG_DATE;
+            ABNDINFO_REC.ABND_TIME = WS_TIME_NOW_GRP_HH || ':' ||
                         WS_TIME_NOW_GRP_MM || ':' ||
                         WS_TIME_NOW_GRP_SS;
-            ABND_UTIME_KEY = WS_U_TIME;
-            ABND_CODE      = 'HNCS';
+            ABNDINFO_REC.ABND_UTIME_KEY = WS_U_TIME;
+            ABNDINFO_REC.ABND_CODE      = 'HNCS';
 
-            EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM);
+            EXEC CICS ASSIGN PROGRAM(ABNDINFO_REC.ABND_PROGRAM);
 
-            ABND_SQLCODE  = SQLCODE_DISPLAY;
-            ABND_FREEFORM = 'FNAND010(4) - ACCOUNT NCS ' ||
+            ABNDINFO_REC.ABND_SQLCODE  = SQLCODE_DISPLAY;
+            ABNDINFO_REC.ABND_FREEFORM = 'FNAND010(4) - ACCOUNT NCS ' ||
                             NCS_ACC_NO_NAME ||
                         ' Cannot be accessed and DB2 UPDATE failed.' ||
-                            ' EIBRESP=' || ABND_RESPCODE ||
-                            ' RESP2=' || ABND_RESP2CODE;
+                            ' EIBRESP=' || ABNDINFO_REC.ABND_RESPCODE ||
+                            ' RESP2=' || ABNDINFO_REC.ABND_RESP2CODE;
 
             EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
                  COMMAREA(ABNDINFO_REC);
@@ -979,29 +979,30 @@
          SQLCODE_DISPLAY = SQLCODE;
 
          ABNDINFO_REC   = '';
-         ABND_RESPCODE  = EIBRESP;
-         ABND_RESP2CODE = EIBRESP2;
+         ABNDINFO_REC.ABND_RESPCODE  = EIBRESP;
+         ABNDINFO_REC.ABND_RESP2CODE = EIBRESP2;
 
-         EXEC CICS ASSIGN APPLID(ABND_APPLID);
+         EXEC CICS ASSIGN APPLID(ABNDINFO_REC.ABND_APPLID);
 
-         ABND_TASKNO_KEY = EIBTASKN;
-         ABND_TRANID     = EIBTRNID;
+         ABNDINFO_REC.ABND_TASKNO_KEY = EIBTASKN;
+         ABNDINFO_REC.ABND_TRANID     = EIBTRNID;
 
          CALL POPULATE_TIME_DATE2;
 
-         ABND_DATE = WS_ORIG_DATE;
-         ABND_TIME = WS_TIME_NOW_GRP_HH || ':' ||
+         ABNDINFO_REC.ABND_DATE = WS_ORIG_DATE;
+         ABNDINFO_REC.ABND_TIME = WS_TIME_NOW_GRP_HH || ':' ||
                      WS_TIME_NOW_GRP_MM || ':' ||
                      WS_TIME_NOW_GRP_SS;
-         ABND_UTIME_KEY = WS_U_TIME;
-         ABND_CODE      = 'HWPT';
+         ABNDINFO_REC.ABND_UTIME_KEY = WS_U_TIME;
+         ABNDINFO_REC.ABND_CODE      = 'HWPT';
 
-         EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM);
+         EXEC CICS ASSIGN PROGRAM(ABNDINFO_REC.ABND_PROGRAM);
 
-         ABND_SQLCODE  = SQLCODE_DISPLAY;
-         ABND_FREEFORM = 'WPD010  - PROCTRAN DB2 INSERT issue.' ||
-                         ' EIBRESP=' || ABND_RESPCODE ||
-                         ' RESP2=' || ABND_RESP2CODE;
+         ABNDINFO_REC.ABND_SQLCODE  = SQLCODE_DISPLAY;
+         ABNDINFO_REC.ABND_FREEFORM =
+             'WPD010  - PROCTRAN DB2 INSERT issue.' ||
+                         ' EIBRESP=' || ABNDINFO_REC.ABND_RESPCODE ||
+                         ' RESP2=' || ABNDINFO_REC.ABND_RESP2CODE;
 
          EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
               COMMAREA(ABNDINFO_REC);
@@ -1042,7 +1043,7 @@
       EXEC CICS FORMATTIME
            ABSTIME(WS_U_TIME)
            DDMMYYYY(WS_ORIG_DATE)
-           TIME(PROC_TRAN_TIME)
+           TIME(PROCTRAN_AREA.PROC_TRAN_TIME)
            DATESEP;
 
       /* Convert gregorian date (YYYYMMDD) to integer */
@@ -1081,14 +1082,17 @@
       WS_FUTURE_DATE = DAYSTODATE(WS_INTEGER,'YYYYMMDD');
 
       /* Store in Account Next Statement Date */
-      SUBSTR(ACCOUNT_NEXT_STMT_DATE,5,4) = SUBSTR(WS_FUTURE_DATE,1,4);
-      SUBSTR(ACCOUNT_NEXT_STMT_DATE,3,2) = SUBSTR(WS_FUTURE_DATE,5,2);
-      SUBSTR(ACCOUNT_NEXT_STMT_DATE,1,2) = SUBSTR(WS_FUTURE_DATE,7,2);
+      SUBSTR(OUTPUT_DATA.ACCOUNT_NEXT_STMT_DATE,5,4) =
+          SUBSTR(WS_FUTURE_DATE,1,4);
+      SUBSTR(OUTPUT_DATA.ACCOUNT_NEXT_STMT_DATE,3,2) =
+          SUBSTR(WS_FUTURE_DATE,5,2);
+      SUBSTR(OUTPUT_DATA.ACCOUNT_NEXT_STMT_DATE,1,2) =
+          SUBSTR(WS_FUTURE_DATE,7,2);
 
-      SUBSTR(ACCOUNT_OPENED,1,2) = WS_ORIG_DATE_DD;
-      SUBSTR(ACCOUNT_OPENED,3,2) = WS_ORIG_DATE_MM;
-      SUBSTR(ACCOUNT_OPENED,5,4) = WS_ORIG_DATE_YYYY;
-      ACCOUNT_LAST_STMT_DATE     = ACCOUNT_OPENED;
+      SUBSTR(OUTPUT_DATA.ACCOUNT_OPENED,1,2) = WS_ORIG_DATE_DD;
+      SUBSTR(OUTPUT_DATA.ACCOUNT_OPENED,3,2) = WS_ORIG_DATE_MM;
+      SUBSTR(OUTPUT_DATA.ACCOUNT_OPENED,5,4) = WS_ORIG_DATE_YYYY;
+      OUTPUT_DATA.ACCOUNT_LAST_STMT_DATE = OUTPUT_DATA.ACCOUNT_OPENED;
 
       HV_ACCOUNT_OPENED_DAY    = WS_ORIG_DATE_DD;
       HV_ACCOUNT_OPENED_DELIM1 = '.';

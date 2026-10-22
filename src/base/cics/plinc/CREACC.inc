@@ -4,7 +4,9 @@
  /*                                                                */
  /* **************************************************************** */
  /* Converted from CREACC.cpy - COMMAREA for Create Account.       */
- /* Include at level 3 inside the declaring DCL 1 DFHCOMMAREA.    */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE CREACC_TMPL;                            */
+  DCL 1 CREACC_TMPL BASED,
    3 COMM_EYECATCHER              CHAR(4),
    3 COMM_CUSTNO                  CHAR(10),
    3 COMM_KEY,

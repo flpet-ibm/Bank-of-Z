@@ -5,7 +5,9 @@
  /* **************************************************************** */
  /* Converted from PAYDBCRZ.cpy - Pay Debit/Credit (z/OS Connect). */
  /* Identical structure to PAYDBCR.inc.                            */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE PAYDBCRZ_TMPL;                          */
+  DCL 1 PAYDBCRZ_TMPL BASED,
    3 COMM_ACCNO                  CHAR(8),
    3 COMM_AMT                    FIXED DEC(12,2),
    3 COMM_SORTC                  CHAR(6),

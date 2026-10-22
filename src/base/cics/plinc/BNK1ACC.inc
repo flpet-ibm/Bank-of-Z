@@ -5,6 +5,9 @@
  /* Generated from BNK1ACC.bms                                     */
  /* Fields: CUSTNO, ACCOUNT(10), MESSAGE, DUMMY                    */
  /***************************************************************** */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE BNK1ACC_TMPL;                           */
+  DCL 1 BNK1ACC_TMPL BASED,
    3 BNK1ACCI,
      5 CUSTNOL       FIXED BIN(15),
      5 CUSTNOA       CHAR(1),

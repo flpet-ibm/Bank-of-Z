@@ -4,7 +4,9 @@
  /*                                                                */
  /* **************************************************************** */
  /* Converted from INQCUSTZ.cpy - Inquire Customer COMMAREA.       */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE INQCUSTZ_TMPL;                          */
+  DCL 1 INQCUSTZ_TMPL BASED,
    3 INQCUST_EYE                  CHAR(4),
    3 INQCUST_SCODE                CHAR(6),
    3 INQCUST_CUSTNO               CHAR(10),

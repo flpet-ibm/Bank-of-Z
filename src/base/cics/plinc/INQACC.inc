@@ -5,8 +5,9 @@
  /* **************************************************************** */
  /* Converted from INQACC.cpy - COMMAREA for Inquire Account.      */
  /* Note: INQACC.cpy defined its own 01-level (INQACC-COMMAREA).   */
- /* For PL/I include we strip the 01 level; declare in program.   */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE INQACC_TMPL;                            */
+  DCL 1 INQACC_TMPL BASED,
    3 INQACC_EYE                  CHAR(4),
    3 INQACC_CUSTNO               CHAR(10),
    3 INQACC_SCODE                CHAR(6),

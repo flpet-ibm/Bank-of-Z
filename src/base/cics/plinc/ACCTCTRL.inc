@@ -4,7 +4,9 @@
  /*                                                                */
  /* **************************************************************** */
  /* Converted from ACCTCTRL.cpy                                    */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE ACCTCTRL_TMPL;                          */
+  DCL 1 ACCTCTRL_TMPL BASED,
    3 ACCOUNT_CONTROL_RECORD,
      5 ACCOUNT_CONTROL_EYE_CATCHER  CHAR(4),
      5 FILLER_CUST                  CHAR(10),

@@ -37,8 +37,8 @@
    /*****************************************************************/
    /* BMS map                                                       */
    /*****************************************************************/
-   DCL 1 BNK1ACCI,
    %INCLUDE BNK1ACC;
+   DCL 1 BNK1ACC_MAP LIKE BNK1ACC_TMPL;
 
    /*****************************************************************/
    /* AID key definitions                                           */
@@ -49,8 +49,8 @@
    /* INQACCCU parameters                                           */
    /*****************************************************************/
    DCL INQACCCU_PROGRAM CHAR(8) INIT('INQACCCU');
-   DCL 1 INQACCCU_COMMAREA,
    %INCLUDE INQACCCU;
+   DCL 1 INQACCCU_COMMAREA LIKE INQACCCU_TMPL;
 
    /*****************************************************************/
    /* Working storage                                               */
@@ -137,16 +137,16 @@
 
    DCL WS_ABEND_PGM CHAR(8) INIT('ABNDPROC');
 
-   DCL 1 ABNDINFO_REC,
    %INCLUDE ABNDINFO;
+   DCL 1 ABNDINFO_REC LIKE ABNDINFO_TMPL;
 
    /*****************************************************************/
    /* MAIN PROCEDURE                                                */
    /*****************************************************************/
    SELECT;
      WHEN (EIBCALEN = 0) DO;
-       BNK1ACCI = LOW(LENGTH(BNK1ACCI));
-       CUSTNOL = -1;
+       BNK1ACC_MAP = LOW(LENGTH(BNK1ACC_MAP));
+       BNK1ACC_MAP.CUSTNOL = -1;
        SEND_FLAG = 'E';
        CALL SEND_MAP;
      END;
@@ -172,9 +172,9 @@
        CALL PROCESS_MAP;
      END;
      OTHERWISE DO;
-       BNK1ACCI = LOW(LENGTH(BNK1ACCI));
-       MESSAGEI = 'Invalid key pressed.';
-       CUSTNOL = -1;
+       BNK1ACC_MAP = LOW(LENGTH(BNK1ACC_MAP));
+       BNK1ACC_MAP.MESSAGEI = 'Invalid key pressed.';
+       BNK1ACC_MAP.CUSTNOL = -1;
        SEND_FLAG = 'A';
        CALL SEND_MAP;
      END;
@@ -217,7 +217,7 @@
      INQACCCU_COMMAREA = '';
      EXEC CICS RECEIVE MAP('BNK1ACC')
                MAPSET('BNK1ACC')
-               INTO(BNK1ACCI)
+               INTO(BNK1ACC_MAP)
                RESP(WS_CICS_RESP)
                RESP2(WS_CICS_RESP2);
      IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN DO;
@@ -235,8 +235,8 @@
    /* EDIT_DATA                                                     */
    /*****************************************************************/
    EDIT_DATA: PROC;
-     IF ^VERIFY(TRIM(CUSTNOI),'0123456789') = 0 THEN DO;
-       MESSAGEI = 'Please enter a customer number.';
+     IF ^VERIFY(TRIM(BNK1ACC_MAP.CUSTNOI),'0123456789') = 0 THEN DO;
+       BNK1ACC_MAP.MESSAGEI = 'Please enter a customer number.';
        VALID_DATA_SW = 'N';
      END;
    END EDIT_DATA;
@@ -247,7 +247,7 @@
    GET_CUST_DATA: PROC;
      INQACCCU_COMMAREA.NUMBER_OF_ACCOUNTS = 20;
      INQACCCU_COMMAREA.COMM_SUCCESS = 'N';
-     INQACCCU_COMMAREA.CUSTOMER_NUMBER = CUSTNOI;
+     INQACCCU_COMMAREA.CUSTOMER_NUMBER = BNK1ACC_MAP.CUSTNOI;
      INQACCCU_COMMAREA.COMM_PCB_POINTER = SYSNULL();
 
      EXEC CICS LINK PROGRAM(INQACCCU_PROGRAM)
@@ -268,32 +268,33 @@
      END;
 
      IF INQACCCU_COMMAREA.CUSTOMER_FOUND = 'N' THEN DO;
-       MESSAGEI = ' ';
-       MESSAGEI = 'Unable to find customer ' ||
+       BNK1ACC_MAP.MESSAGEI = ' ';
+       BNK1ACC_MAP.MESSAGEI = 'Unable to find customer ' ||
                   TRIM(INQACCCU_COMMAREA.CUSTOMER_NUMBER);
        DO WS_INDEX = 1 TO 10;
-         ACCOUNT(WS_INDEX) = ' ';
+         BNK1ACC_MAP.ACCOUNT(WS_INDEX) = ' ';
        END;
        RETURN;
      END;
 
      DO WS_INDEX = 1 TO 10;
-       ACCOUNT(WS_INDEX) = ' ';
+       BNK1ACC_MAP.ACCOUNT(WS_INDEX) = ' ';
      END;
 
      IF INQACCCU_COMMAREA.NUMBER_OF_ACCOUNTS = 0 THEN
-       MESSAGEI = 'No accounts found for customer';
+       BNK1ACC_MAP.MESSAGEI = 'No accounts found for customer';
      ELSE DO;
        IF INQACCCU_COMMAREA.COMM_SUCCESS = 'N' THEN DO;
-         MESSAGEI = ' ';
-         MESSAGEI = 'Error accessing accounts for customer ' ||
+         BNK1ACC_MAP.MESSAGEI = ' ';
+         BNK1ACC_MAP.MESSAGEI =
+           'Error accessing accounts for customer ' ||
            TRIM(INQACCCU_COMMAREA.CUSTOMER_NUMBER) || '.';
        END;
        ELSE DO;
          NUMBER_OF_ACCOUNTS_DISPLAY =
            CHAR(INQACCCU_COMMAREA.NUMBER_OF_ACCOUNTS);
-         MESSAGEI = ' ';
-         MESSAGEI = TRIM(NUMBER_OF_ACCOUNTS_DISPLAY) ||
+         BNK1ACC_MAP.MESSAGEI = ' ';
+         BNK1ACC_MAP.MESSAGEI = TRIM(NUMBER_OF_ACCOUNTS_DISPLAY) ||
            ' accounts found';
          DO WS_INDEX = 1 TO
             INQACCCU_COMMAREA.NUMBER_OF_ACCOUNTS
@@ -302,7 +303,7 @@
              INQACCCU_COMMAREA.COMM_SCODE(WS_INDEX);
            ACCNO_CHAR =
              CHAR(INQACCCU_COMMAREA.COMM_ACCNO(WS_INDEX));
-           ACCOUNT(WS_INDEX) = ' ';
+           BNK1ACC_MAP.ACCOUNT(WS_INDEX) = ' ';
            WS_AVAIL_BAL_SIGN = ' ';
            WS_ACT_BAL_SIGN = ' ';
            IF INQACCCU_COMMAREA.COMM_AVAIL_BAL(WS_INDEX)
@@ -321,7 +322,7 @@
            WS_ACT_BAL_9   =
              ABS(INQACCCU_COMMAREA.COMM_ACTUAL_BAL(
                  WS_INDEX));
-           ACCOUNT(WS_INDEX) =
+           BNK1ACC_MAP.ACCOUNT(WS_INDEX) =
              SCODE_CHAR || '      ' ||
              ACCNO_CHAR || '         ' ||
              INQACCCU_COMMAREA.COMM_ACC_TYPE(WS_INDEX) ||
@@ -342,7 +343,7 @@
      IF SEND_FLAG = 'E' THEN DO;
        EXEC CICS SEND MAP('BNK1ACC')
                  MAPSET('BNK1ACC')
-                 FROM(BNK1ACCI)
+                 FROM(BNK1ACC_MAP)
                  ERASE CURSOR FREEKB
                  RESP(WS_CICS_RESP)
                  RESP2(WS_CICS_RESP2);
@@ -357,7 +358,7 @@
      IF SEND_FLAG = 'D' THEN DO;
        EXEC CICS SEND MAP('BNK1ACC')
                  MAPSET('BNK1ACC')
-                 FROM(BNK1ACCI)
+                 FROM(BNK1ACC_MAP)
                  DATAONLY CURSOR FREEKB
                  RESP(WS_CICS_RESP)
                  RESP2(WS_CICS_RESP2);
@@ -373,7 +374,7 @@
      IF SEND_FLAG = 'A' THEN DO;
        EXEC CICS SEND MAP('BNK1ACC')
                  MAPSET('BNK1ACC')
-                 FROM(BNK1ACCI)
+                 FROM(BNK1ACC_MAP)
                  DATAONLY ALARM CURSOR FREEKB
                  RESP(WS_CICS_RESP)
                  RESP2(WS_CICS_RESP2);
@@ -417,20 +418,20 @@
    SETUP_ABND_INFO: PROC (P_MSG);
      DCL P_MSG CHAR(*);
      ABNDINFO_REC = '';
-     ABND_RESPCODE  = EIBRESP;
-     ABND_RESP2CODE = EIBRESP2;
-     EXEC CICS ASSIGN APPLID(ABND_APPLID);
-     ABND_TASKNO_KEY = EIBTASKN;
-     ABND_TRANID     = EIBTRNID;
+     ABNDINFO_REC.ABND_RESPCODE  = EIBRESP;
+     ABNDINFO_REC.ABND_RESP2CODE = EIBRESP2;
+     EXEC CICS ASSIGN APPLID(ABNDINFO_REC.ABND_APPLID);
+     ABNDINFO_REC.ABND_TASKNO_KEY = EIBTASKN;
+     ABNDINFO_REC.ABND_TRANID     = EIBTRNID;
      CALL POPULATE_TIME_DATE;
-     ABND_DATE = WS_ORIG_DATE;
-     ABND_TIME = WS_TIME_NOW_HH || ':' ||
+     ABNDINFO_REC.ABND_DATE = WS_ORIG_DATE;
+     ABNDINFO_REC.ABND_TIME = WS_TIME_NOW_HH || ':' ||
                  WS_TIME_NOW_MM || ':' || WS_TIME_NOW_SS;
-     ABND_UTIME_KEY = WS_U_TIME;
-     ABND_CODE = 'HBNK';
-     EXEC CICS ASSIGN PROGRAM(ABND_PROGRAM);
-     ABND_SQLCODE = '0';
-     ABND_FREEFORM = SUBSTR(P_MSG || ' EIBRESP=' ||
+     ABNDINFO_REC.ABND_UTIME_KEY = WS_U_TIME;
+     ABNDINFO_REC.ABND_CODE = 'HBNK';
+     EXEC CICS ASSIGN PROGRAM(ABNDINFO_REC.ABND_PROGRAM);
+     ABNDINFO_REC.ABND_SQLCODE = '0';
+     ABNDINFO_REC.ABND_FREEFORM = SUBSTR(P_MSG || ' EIBRESP=' ||
        CHAR(EIBRESP) || ' RESP2=' || CHAR(EIBRESP2),1,80);
      EXEC CICS LINK PROGRAM(WS_ABEND_PGM)
                COMMAREA(ABNDINFO_REC);

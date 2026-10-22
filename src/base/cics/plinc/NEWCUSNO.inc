@@ -5,7 +5,9 @@
  /* **************************************************************** */
  /* Converted from NEWCUSNO.cpy - New Customer Number COMMAREA.    */
  /* 88-levels converted to comments showing valid function codes.  */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE NEWCUSNO_TMPL;                          */
+  DCL 1 NEWCUSNO_TMPL BASED,
    3 NEWCUSNO_FUNCTION            CHAR(1),
                                   /* 'G'=get-new, 'R'=rollback, 'C'=current */
    3 CUSTOMER_NUMBER              CHAR(10),

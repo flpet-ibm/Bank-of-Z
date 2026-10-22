@@ -4,7 +4,9 @@
  /*                                                                */
  /* **************************************************************** */
  /* Converted from XFRFUN.cpy - Transfer Function COMMAREA.        */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE XFRFUN_TMPL;                            */
+  DCL 1 XFRFUN_TMPL BASED,
    3 COMM_FACCNO                 CHAR(8),
    3 COMM_FSCODE                 CHAR(6),
    3 COMM_TACCNO                 CHAR(8),

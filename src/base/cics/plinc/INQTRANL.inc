@@ -5,10 +5,11 @@
  /* **************************************************************** */
  /* Converted from INQTRANL.cpy - Inquire Transaction List.        */
  /* Note: INQTRANL.cpy defined its own 01-level.                   */
- /* For PL/I include we strip the 01 level; declare in program.   */
  /* 88-levels converted to comments showing valid values.         */
  /* OCCURS 100 kept as fixed array.                                */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE INQTRANL_TMPL;                          */
+  DCL 1 INQTRANL_TMPL BASED,
    3 INQTRANL_EYE                CHAR(4),
                                   /* valid value: 'ITRL' */
    /* Input parameters */

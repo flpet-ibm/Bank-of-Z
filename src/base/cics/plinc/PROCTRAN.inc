@@ -6,7 +6,9 @@
  /* Converted from PROCTRAN.cpy - Process Transaction record.      */
  /* Multiple REDEFINES converted to UNIONs.                        */
  /* 88-levels converted to comments showing valid values.         */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE PROCTRAN_TMPL;                          */
+  DCL 1 PROCTRAN_TMPL BASED,
    3 PROC_TRAN_DATA,
      5 * UNION,
        7 PROC_TRAN_EYE_CATCHER    CHAR(4),

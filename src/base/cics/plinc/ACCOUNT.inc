@@ -4,7 +4,9 @@
  /*                                                                */
  /* **************************************************************** */
  /* Converted from ACCOUNT.cpy                                     */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE ACCOUNT_TMPL;                           */
+  DCL 1 ACCOUNT_TMPL BASED,
    3 ACCOUNT_DATA,
      5 ACCOUNT_EYE_CATCHER        CHAR(4),
      5 ACCOUNT_CUST_NO             CHAR(10),

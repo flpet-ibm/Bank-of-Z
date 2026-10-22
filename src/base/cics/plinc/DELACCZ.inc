@@ -5,7 +5,9 @@
  /* **************************************************************** */
  /* Converted from DELACCZ.cpy - variable-length account details.  */
  /* OCCURS DEPENDING ON converted to (* REFER()) in PL/I.         */
- /* Include at level 3 inside the declaring DCL 1 structure.      */
+  /* Structure template only - no storage is allocated.            */
+  /* Usage: DCL 1 var LIKE DELACCZ_TMPL;                           */
+  DCL 1 DELACCZ_TMPL BASED,
    3 NUMBER_OF_ACCOUNTS           FIXED BIN(31),
    3 CUSTOMER_NUMBER              CHAR(10),
    3 COMM_SUCCESS                 CHAR(1),
