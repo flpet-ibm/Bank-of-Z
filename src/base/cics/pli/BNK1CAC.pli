@@ -154,7 +154,7 @@
    SELECT;
      WHEN (EIBCALEN = 0) DO;
        /* First time through - send blank map */
-       BNK1CAO = LOW-VALUE;
+       BNK1CAO = LOW-VALUE(LENGTH(BNK1CAO));
        BNK1CAO.CUSTNOL = -1;
        SEND_FLAG = 'E';
        BNK1CAO.MESSAGEI = ' ';
