@@ -234,6 +234,18 @@ application:
           forFiles: "**/src/base/ims/pli/*.pli"
           value: true
 
+        # ----- Link-edit instream for MQTRIG (CICS PL/I + MQ) -----
+        # CSQCSTUB is the MQ stub for CICS applications. It is resolved
+        # from SCSQLOAD, which is added to SYSLIB when the build marks
+        # the program as using MQ (IS_MQ).
+        - name: linkEditStream
+          forFiles:
+            - "**/src/base/cics/pli/MQTRIG.pli"
+          value: |2
+              INCLUDE  SYSLIB(${MEMBER})
+              INCLUDE  SYSLIB(CSQCSTUB)
+              NAME     ${MEMBER}(R)
+
         # ----- Link-edit instream for IBLOGIN (IMS PL/I program) -----
         # CEESTART is the Language Environment entry point required
         # for PL/I programs running under IMS.

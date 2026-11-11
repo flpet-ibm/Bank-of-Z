@@ -1,0 +1,48 @@
+*
+* Bank of Z - MQ triggering of a CICS transaction (sample)
+*
+* When a message arrives on BANKZ.REQUEST.QUEUE the queue manager puts
+* a trigger message on BANKZ.INITQ. The CICS trigger monitor CKTI reads
+* it and starts transaction OMQT (program MQTRIG).
+*
+* Run with CSQUTIL COMMAND, the MQ console or runmqsc.
+* Names are samples: adjust them to your naming standard.
+*
+
+* Initiation queue read by CKTI. One CKTI per initiation queue.
+DEFINE QLOCAL('BANKZ.INITQ') +
+       DESCR('Bank of Z CICS initiation queue') +
+       USAGE(NORMAL) +
+       SHARE +
+       DEFSOPT(SHARED) +
+       REPLACE
+
+* Process definition: names the CICS transaction to start.
+* APPLICID must be a CICS transaction id when started by CKTI.
+DEFINE PROCESS('BANKZ.PROCESS') +
+       DESCR('Start CICS transaction OMQT') +
+       APPLTYPE(CICS) +
+       APPLICID('OMQT') +
+       USERDATA(' ') +
+       REPLACE
+
+* Backout queue for messages that keep failing (poison messages)
+DEFINE QLOCAL('BANKZ.REQUEST.BACKOUT') +
+       DESCR('Bank of Z request backout queue') +
+       REPLACE
+
+* Application queue. TRIGTYPE(FIRST) fires when the queue goes from
+* empty to not empty, so MQTRIG must read until the queue is empty.
+DEFINE QLOCAL('BANKZ.REQUEST.QUEUE') +
+       DESCR('Bank of Z request queue, triggers OMQT') +
+       PROCESS('BANKZ.PROCESS') +
+       INITQ('BANKZ.INITQ') +
+       TRIGGER +
+       TRIGTYPE(FIRST) +
+       TRIGDPTH(1) +
+       TRIGMPRI(0) +
+       BOTHRESH(3) +
+       BOQNAME('BANKZ.REQUEST.BACKOUT') +
+       SHARE +
+       DEFSOPT(SHARED) +
+       REPLACE

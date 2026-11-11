@@ -131,6 +131,33 @@ Full documentation: <https://ibm.github.io/Bank-of-Z/>
 
 The default Zowe profile is `bank-of-z` (z/OSMF port 9444, RSE port 8195, SSH port 22). See [`zowe.config.json`](zowe.config.json). Credentials are stored in the Zowe secure credential store (not in the file).
 
+## ZAPP Configuration
+
+**File:** `zapp.yaml`
+**Reference:** https://ibm.github.io/zopeneditor-about/Docs/zapp.html
+
+**Property groups defined:** cobol-local (COBOL), pl1-local (PL/I), asm-local (HLASM), jcl-local (JCL), remote-libraries (PL/I, MVS)
+
+**Syslib paths (copybook/include resolution):**
+- COBOL: `src/base/cics/copy`, `src/base/ims/copy`
+- PL/I: `src/base/cics/plinc`
+- HLASM: none yet (no macro library in the workspace; TODO in `zapp.yaml`)
+- JCL: `src/base/batch/jcl`
+
+**MVS datasets (remote-libraries, PL/I):** `DEV.ZAPPBUIL.BMS.COPY`, `CICSTS63.CICS.SDFHCOB`
+
+**Profiles defined:** `my-analysis` (analysis), `taz-test` (test), `zcodescan` (zcodescan), `zBuilder-userbuild` (dbb)
+
+**Analysis scope (`my-analysis`):** `containsCics: true`, `imsRuntime: IMS_BMP`
+- cobol-scope: `src/base/cics/cobol`, `src/base/ims/cobol`
+- pl1-scope: `src/base/cics/pli`, `src/base/ims/pli`, `src/base/batch/pli`
+- hlasm-scope: `src/base/ims/DBD`, `src/base/ims/PSB`
+- jcl-scope: `src/base/batch/jcl`
+- IMS libraries: ims-psb `src/base/ims/PSB`, ims-dbd `src/base/ims/DBD`
+
+**Custom variables used:** `${dbbHlq}`, `${errPrefix}` (define under `zopeneditor.zapp.variables` in VS Code user settings)
+
+
 ## Coding Standards
 
 Coding standards for COBOL and PL/I are enforced via the workspace's coding standard skill. Do not reference standards files directly — apply standards through the skill.

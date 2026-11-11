@@ -7,22 +7,84 @@ description: 'CRRZG5299I Note that this default file searches all your local
   <https://ibm.github.io/zopeneditor-about/Docs/setting_propertygroup.html>'
 author: IBM Z Open Editor
 propertyGroups:
-  - name: search-all
+  # ── COBOL ───────────────────────────────────────────────────────────
+  # syslib : COBOL copybooks for the CICS and IMS paths
+  - name: cobol-local
+    language: cobol
+    libraries:
+      - name: syslib
+        type: local
+        locations:
+          - "src/base/cics/copy"
+          - "src/base/ims/copy"
+  # ── PL/I ────────────────────────────────────────────────────────────
+  # syslib : PL/I include files converted from CICS COBOL copybooks
+  - name: pl1-local
+    language: pl1
     libraries:
       - name: syslib
         type: local
         locations:
           - "**/plinc"
-      - name: maclib
+  # ── HLASM ───────────────────────────────────────────────────────────
+  # syslib : no macro library exists in the workspace
+  - name: asm-local
+    language: hlasm
+    libraries:
+      - name: syslib
+        type: local
+        locations: [] # TODO: replace [] with path(s) once directory exists, e.g. - "asm/macros"
+  # ── JCL ─────────────────────────────────────────────────────────────
+  # syslib : batch JCL members
+  - name: jcl-local
+    language: jcl
+    libraries:
+      - name: syslib
         type: local
         locations:
-          - "**/mac"
-      - name: proclib
-        type: local
-        locations:
-          - "**/procs"
+          - "src/base/batch/jcl"
+  - name: remote-libraries
+    language: pl1
+    compilerOptions: CICS
+    libraries:
+        - name: syslib
+          type: mvs
+          locations:
+             - DEV.ZAPPBUIL.BMS.COPY    # default name when running bank-of-z setup
+             - CICSTS63.CICS.SDFHCOB
             
 profiles:
+  # Analysis scope (source directories to scan)
+  - name: my-analysis
+    type: analysis
+    settings:
+      containsCics: true
+      imsRuntime: IMS_BMP
+      analysisScope:
+        - name: cobol-scope
+          locations:
+            - "src/base/cics/cobol"
+            - "src/base/ims/cobol"
+        - name: pl1-scope
+          locations:
+            - "src/base/cics/pli"
+            - "src/base/ims/pli"
+            - "src/base/batch/pli"
+        - name: hlasm-scope
+          locations:
+            - "src/base/ims/DBD"
+            - "src/base/ims/PSB"
+        - name: jcl-scope
+          locations:
+            - "src/base/batch/jcl"
+      libraries:
+        - name: ims-psb
+          locations:
+            - "src/base/ims/PSB"
+        - name: ims-dbd
+          locations:
+            - "src/base/ims/DBD"
+
   # TAZ
   - name: taz-test
     type: test

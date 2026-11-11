@@ -682,7 +682,46 @@ resourceDefinitions:
       concurrency: THREADSAFE
       api: CICSAPI
       datalocation: ANY
+  - program:
+      name: MQTRIG
+      group: BANKZGRP
+      description: Triggered by MQ via CKTI, drains BANKZ.REQUEST.QUEUE
+      language: PLI
+      concurrency: THREADSAFE
+      api: CICSAPI
+      datalocation: ANY
   # TRANSACTION Definitions
+  - transaction:
+      name: OMQT
+      group: BANKZGRP
+      description: MQ triggered transaction (started by CKTI)
+      program: MQTRIG
+      twasize: 0
+      profile: DFHCICST
+      status: ENABLED
+      taskdataloc: ANY
+      taskdatakey: USER
+      storageclear: "NO"
+      runaway: SYSTEM
+      shutdown: DISABLED
+      isolate: "YES"
+      dynamic: "NO"
+      routable: "NO"
+      priority: 1
+      tranclass: DFHTCL00
+      dtimout: "NO"
+      restart: "NO"
+      spurge: "NO"
+      tpurge: "NO"
+      dump: "YES"
+      trace: "YES"
+      confdata: "NO"
+      otstimeout: "NO"
+      action: BACKOUT
+      wait: "YES"
+      waittime: "0,0,0"
+      ressec: "NO"
+      cmdsec: "NO"
   - transaction:
       name: OCR1
       group: BANKZGRP

@@ -29,6 +29,7 @@ The Bank of Z repository contains the application source, setup automation, buil
 | `src/base/cics/` | COBOL programs, BMS maps, and copybooks for the CICS transaction path |
 | `src/base/ims/` | COBOL programs and copybooks for the IMS transaction path |
 | `src/base/batch/` | Batch application components |
+| `src/base/mq/` | IBM MQ definitions (MQSC) for the sample queue that triggers the CICS transaction `OMQT` (program `MQTRIG`) through the CKTI trigger monitor |
 | `src/api/` | z/OS Connect API project — Gradle-based build producing the API deployment artifact |
 | `src/frontend/` | Browser-based frontend — HTML, CSS, JavaScript, and a Node.js dev server |
 

@@ -1,0 +1,325 @@
+*PROCESS MARGINS(1,72);
+ /* **************************************************************** */
+ /*                                                                */
+ /*  Copyright IBM Corp. 2026                                      */
+ /*                                                                */
+ /* **************************************************************** */
+ /* MQTRIG - Triggered CICS transaction (sample)                   */
+ /*                                                                */
+ /* Started by the CICS MQ trigger monitor CKTI when a message     */
+ /* arrives on the application queue (src/base/mq/mqsc/BANKZ.mqsc).*/
+ /*                                                                */
+ /* 1. Retrieves the MQTM trigger message (EXEC CICS RETRIEVE).    */
+ /* 2. Opens the queue named in MQTM QNAME for shared input.       */
+ /* 3. Reads messages under syncpoint until the queue is empty.    */
+ /* 4. Closes the queue and returns to CICS.                       */
+ /*                                                                */
+ /* Under CICS no MQCONN or MQDISC is needed: the region is        */
+ /* already connected, so the connection handle stays zero.        */
+ /* Link-edit with the CICS MQ stub CSQCSTUB.                      */
+ /* **************************************************************** */
+ MQTRIG: PROCEDURE(COMM_AREA_PTR) OPTIONS(MAIN REENTRANT);
+
+   DCL COMM_AREA_PTR POINTER;
+
+   /* No COMMAREA is passed by CKTI; declared for the standard     */
+   DCL 1 DFHCOMMAREA BASED(COMM_AREA_PTR),
+     3 DFHCOMMAREA_UNUSED   CHAR(1);
+
+   /* MQI constants, structures and entry point declarations       */
+   %INCLUDE CMQP;
+   %INCLUDE CMQEPP;
+
+   /* Trigger message, object descriptor, message descriptor and   */
+   /* get message options                                          */
+   DCL 1 WS_TRIGGER_MSG     LIKE MQTM;
+   DCL 1 WS_OBJ_DESC        LIKE MQOD;
+   DCL 1 WS_MSG_DESC        LIKE MQMD;
+   DCL 1 WS_GET_OPTS        LIKE MQGMO;
+
+   /* MQ call parameters                                           */
+   DCL WS_HCONN             FIXED BIN(31) INIT(0);
+   DCL WS_HOBJ              FIXED BIN(31) INIT(0);
+   DCL WS_OPEN_OPTS         FIXED BIN(31) INIT(0);
+   DCL WS_CLOSE_OPTS        FIXED BIN(31) INIT(0);
+   DCL WS_COMPCODE          FIXED BIN(31) INIT(0);
+   DCL WS_REASON            FIXED BIN(31) INIT(0);
+   DCL WS_BUFFER            CHAR(4096);
+   %INCLUDE INQACC;
+   DCL 1 WS_BUFFER2         LIKE INQACC_TMPL 
+          based(addr(ws_buffer));
+   DCL WS_BUFFER_LEN        FIXED BIN(31) INIT(0);
+   DCL WS_DATA_LEN          FIXED BIN(31) INIT(0);
+
+   /* Wait time in milliseconds for the next message               */
+   DCL WS_WAIT_MS           FIXED BIN(31) INIT(5000);
+
+   /* CICS working storage (LENGTH options require a halfword)     */
+   DCL WS_TM_LEN            FIXED BIN(15) INIT(0);
+   DCL WS_LOG_LEN           FIXED BIN(15) INIT(120);
+   DCL WS_CICS_RESP         FIXED BIN(31) INIT(0);
+   DCL WS_CICS_RESP2        FIXED BIN(31) INIT(0);
+
+   /* Control flags and counters                                   */
+   DCL WS_MORE              BIT(1) INIT('1'B);
+   DCL WS_Q_OPEN            BIT(1) INIT('0'B);
+   DCL WS_MSG_COUNT         FIXED BIN(31) INIT(0);
+   DCL WS_LOG_MSG           CHAR(120) INIT(' ');
+
+   /* ACCOUNT DB2 table declaration                                */
+   EXEC SQL INCLUDE ACCDB2;
+
+   /* SQL Communication Area (SQLCA)                               */
+   DCL 1 SQLCA,
+     3 SQLCAID     CHAR(8)          INIT('SQLCA   '),
+     3 SQLCABC     FIXED BIN(31)    INIT(136),
+     3 SQLCODE     FIXED BIN(31)    INIT(0),
+     3 SQLERRM,
+       5 SQLERRML  FIXED BIN(15)    INIT(0),
+       5 SQLERRMC  CHAR(70)         INIT(' '),
+     3 SQLERRP     CHAR(8)          INIT(' '),
+     3 SQLERRD    (6) FIXED BIN(31) INIT(0),
+     3 SQLWARN,
+       5 SQLWARN0  CHAR(1)          INIT(' '),
+       5 SQLWARN1  CHAR(1)          INIT(' '),
+       5 SQLWARN2  CHAR(1)          INIT(' '),
+       5 SQLWARN3  CHAR(1)          INIT(' '),
+       5 SQLWARN4  CHAR(1)          INIT(' '),
+       5 SQLWARN5  CHAR(1)          INIT(' '),
+       5 SQLWARN6  CHAR(1)          INIT(' '),
+       5 SQLWARN7  CHAR(1)          INIT(' '),
+     3 SQLSTATE    CHAR(5)          INIT(' ');
+
+   /* ACCOUNT host variables for DB2                               */
+   DCL 1 HOST_ACCOUNT_ROW,
+     3 HV_ACCOUNT_EYECATCHER      CHAR(4),
+     3 HV_ACCOUNT_CUST_NO         CHAR(10),
+     3 HV_ACCOUNT_SORTCODE        CHAR(6),
+     3 HV_ACCOUNT_ACC_NO          CHAR(8),
+     3 HV_ACCOUNT_ACC_TYPE        CHAR(8),
+     3 HV_ACCOUNT_INT_RATE        FIXED DEC(6,2),
+     3 HV_ACCOUNT_OPENED          CHAR(10),
+     3 HV_ACCOUNT_OVERDRAFT_LIM   FIXED BIN(31),
+     3 HV_ACCOUNT_LAST_STMT       CHAR(10),
+     3 HV_ACCOUNT_NEXT_STMT       CHAR(10),
+     3 HV_ACCOUNT_AVAIL_BAL       FIXED DEC(12,2),
+     3 HV_ACCOUNT_ACTUAL_BAL      FIXED DEC(12,2);
+
+   /*****************************************************************/
+   /* MAIN PROCEDURE                                                */
+   /*****************************************************************/
+   CALL GET_TRIGGER_MESSAGE;
+   CALL OPEN_QUEUE;
+   CALL DRAIN_QUEUE;
+   CALL CLOSE_QUEUE;
+   CALL GET_ME_OUT_OF_HERE;
+
+   /*****************************************************************/
+   /* GET_TRIGGER_MESSAGE - Retrieve the MQTM passed by CKTI        */
+   /*****************************************************************/
+   GET_TRIGGER_MESSAGE: PROC;
+
+     WS_TM_LEN = STG(WS_TRIGGER_MSG);
+
+     EXEC CICS RETRIEVE INTO(WS_TRIGGER_MSG)
+               LENGTH(WS_TM_LEN)
+               RESP(WS_CICS_RESP) RESP2(WS_CICS_RESP2);
+
+     /* Not started by CKTI (for example typed at a terminal)     */
+     IF WS_CICS_RESP ^= DFHRESP(NORMAL) THEN
+       CALL GET_ME_OUT_OF_HERE;
+
+     IF WS_TRIGGER_MSG.STRUCID ^= MQTM_STRUC_ID THEN DO;
+       WS_LOG_MSG = 'MQTRIG - Start data is not an MQTM structure';
+       CALL ABEND_ROUTINE;
+     END;
+
+   END GET_TRIGGER_MESSAGE;
+
+   /*****************************************************************/
+   /* OPEN_QUEUE - Open the triggering queue for shared input       */
+   /*****************************************************************/
+   OPEN_QUEUE: PROC;
+
+     WS_OBJ_DESC.STRUCID    = MQOD_STRUC_ID;
+     WS_OBJ_DESC.VERSION    = MQOD_VERSION_1;
+     WS_OBJ_DESC.OBJECTTYPE = MQOT_Q;
+     WS_OBJ_DESC.OBJECTNAME = WS_TRIGGER_MSG.QNAME;
+
+     WS_OPEN_OPTS = MQOO_INPUT_SHARED + MQOO_FAIL_IF_QUIESCING;
+
+     CALL MQOPEN(WS_HCONN, WS_OBJ_DESC, WS_OPEN_OPTS, WS_HOBJ,
+                 WS_COMPCODE, WS_REASON);
+
+     IF WS_COMPCODE ^= MQCC_OK THEN DO;
+       WS_LOG_MSG = 'MQTRIG - MQOPEN failed. REASON=' ||
+                    CHAR(WS_REASON);
+       CALL ABEND_ROUTINE;
+     END;
+
+     WS_Q_OPEN = '1'B;
+
+   END OPEN_QUEUE;
+
+   /*****************************************************************/
+   /* DRAIN_QUEUE - Read messages until none are available          */
+   /*****************************************************************/
+   DRAIN_QUEUE: PROC;
+
+     WS_GET_OPTS.STRUCID  = MQGMO_STRUC_ID;
+     WS_GET_OPTS.VERSION  = MQGMO_VERSION_1;
+     WS_GET_OPTS.OPTIONS  = MQGMO_WAIT + MQGMO_SYNCPOINT +
+                            MQGMO_FAIL_IF_QUIESCING;
+     WS_GET_OPTS.WAITINTERVAL = WS_WAIT_MS;
+
+     DO WHILE(WS_MORE);
+
+       /* Reset the descriptor so each get takes the next message  */
+       WS_MSG_DESC.STRUCID   = MQMD_STRUC_ID;
+       WS_MSG_DESC.VERSION   = MQMD_VERSION_1;
+       WS_MSG_DESC.MSGID     = MQMI_NONE;
+       WS_MSG_DESC.CORRELID  = MQCI_NONE;
+       WS_MSG_DESC.ENCODING  = MQENC_NATIVE;
+       WS_MSG_DESC.CODEDCHARSETID = MQCCSI_Q_MGR;
+
+       WS_BUFFER_LEN = LENGTH(WS_BUFFER);
+
+       CALL MQGET(WS_HCONN, WS_HOBJ, WS_MSG_DESC, WS_GET_OPTS,
+                  WS_BUFFER_LEN, WS_BUFFER, WS_DATA_LEN,
+                  WS_COMPCODE, WS_REASON);
+
+       IF WS_COMPCODE = MQCC_OK THEN DO;
+         CALL PROCESS_MESSAGE;
+         /* CICS syncpoint commits the MQGET and any other work    */
+         EXEC CICS SYNCPOINT;
+       END;
+       ELSE IF WS_REASON = MQRC_NO_MSG_AVAILABLE THEN
+         WS_MORE = '0'B;
+       ELSE DO;
+         WS_LOG_MSG = 'MQTRIG - MQGET failed. REASON=' ||
+                      CHAR(WS_REASON);
+         CALL ABEND_ROUTINE;
+       END;
+
+     END;
+
+   END DRAIN_QUEUE;
+
+   /*****************************************************************/
+   /* PROCESS_MESSAGE - Business processing of one message          */
+   /* The message is in WS_BUFFER, WS_DATA_LEN bytes long and is    */
+   /* mapped by WS_BUFFER2 (INQACC layout). The account data is     */
+   /* inserted into the DB2 ACCOUNT table.                          */
+   /*****************************************************************/
+   PROCESS_MESSAGE: PROC;
+
+     WS_MSG_COUNT = WS_MSG_COUNT + 1;
+
+     /* Move the message data to the DB2 host variables             */
+     HV_ACCOUNT_EYECATCHER    = WS_BUFFER2.INQACC_EYE;
+     HV_ACCOUNT_CUST_NO       = WS_BUFFER2.INQACC_CUSTNO;
+     HV_ACCOUNT_SORTCODE      = WS_BUFFER2.INQACC_SCODE;
+     HV_ACCOUNT_ACC_NO        = WS_BUFFER2.INQACC_ACCNO;
+     HV_ACCOUNT_ACC_TYPE      = WS_BUFFER2.INQACC_ACC_TYPE;
+     HV_ACCOUNT_INT_RATE      = WS_BUFFER2.INQACC_INT_RATE;
+     HV_ACCOUNT_OVERDRAFT_LIM = WS_BUFFER2.INQACC_OVERDRAFT;
+     HV_ACCOUNT_AVAIL_BAL     = WS_BUFFER2.INQACC_AVAIL_BAL;
+     HV_ACCOUNT_ACTUAL_BAL    = WS_BUFFER2.INQACC_ACTUAL_BAL;
+
+     /* Message dates are DDMMYYYY; DB2 dates are DD.MM.YYYY        */
+     HV_ACCOUNT_OPENED    = WS_BUFFER2.INQACC_OPENED_DAY || '.' ||
+                            WS_BUFFER2.INQACC_OPENED_MONTH || '.' ||
+                            WS_BUFFER2.INQACC_OPENED_YEAR;
+     HV_ACCOUNT_LAST_STMT = WS_BUFFER2.INQACC_LAST_STMT_DAY || '.' ||
+                            WS_BUFFER2.INQACC_LAST_STMT_MONTH || '.' ||
+                            WS_BUFFER2.INQACC_LAST_STMT_YEAR;
+     HV_ACCOUNT_NEXT_STMT = WS_BUFFER2.INQACC_NEXT_STMT_DAY || '.' ||
+                            WS_BUFFER2.INQACC_NEXT_STMT_MONTH || '.' ||
+                            WS_BUFFER2.INQACC_NEXT_STMT_YEAR;
+
+     EXEC SQL
+        INSERT INTO ACCOUNT
+               (ACCOUNT_EYECATCHER,
+                ACCOUNT_CUSTOMER_NUMBER,
+                ACCOUNT_SORTCODE,
+                ACCOUNT_NUMBER,
+                ACCOUNT_TYPE,
+                ACCOUNT_INTEREST_RATE,
+                ACCOUNT_OPENED,
+                ACCOUNT_OVERDRAFT_LIMIT,
+                ACCOUNT_LAST_STATEMENT,
+                ACCOUNT_NEXT_STATEMENT,
+                ACCOUNT_AVAILABLE_BALANCE,
+                ACCOUNT_ACTUAL_BALANCE
+                )
+        VALUES(:HV_ACCOUNT_EYECATCHER,
+               :HV_ACCOUNT_CUST_NO,
+               :HV_ACCOUNT_SORTCODE,
+               :HV_ACCOUNT_ACC_NO,
+               :HV_ACCOUNT_ACC_TYPE,
+               :HV_ACCOUNT_INT_RATE,
+               :HV_ACCOUNT_OPENED,
+               :HV_ACCOUNT_OVERDRAFT_LIM,
+               :HV_ACCOUNT_LAST_STMT,
+               :HV_ACCOUNT_NEXT_STMT,
+               :HV_ACCOUNT_AVAIL_BAL,
+               :HV_ACCOUNT_ACTUAL_BAL
+              );
+
+     /* Abend on failure so CICS backs out the unit of work and    */
+     /* the MQGET is put back on the queue                          */
+     IF SQLCODE ^= 0 THEN DO;
+       WS_LOG_MSG = 'MQTRIG - INSERT INTO ACCOUNT failed. SQLCODE=' ||
+                    CHAR(SQLCODE);
+       CALL ABEND_ROUTINE;
+     END;
+
+   END PROCESS_MESSAGE;
+
+   /*****************************************************************/
+   /* CLOSE_QUEUE - Close the queue                                 */
+   /*****************************************************************/
+   CLOSE_QUEUE: PROC;
+
+     IF WS_Q_OPEN THEN DO;
+       WS_CLOSE_OPTS = MQCO_NONE;
+
+       CALL MQCLOSE(WS_HCONN, WS_HOBJ, WS_CLOSE_OPTS,
+                    WS_COMPCODE, WS_REASON);
+
+       IF WS_COMPCODE ^= MQCC_OK THEN DO;
+         WS_LOG_MSG = 'MQTRIG - MQCLOSE failed. REASON=' ||
+                      CHAR(WS_REASON);
+         CALL ABEND_ROUTINE;
+       END;
+
+       WS_Q_OPEN = '0'B;
+     END;
+
+   END CLOSE_QUEUE;
+
+   /*****************************************************************/
+   /* GET_ME_OUT_OF_HERE - CICS RETURN                              */
+   /*****************************************************************/
+   GET_ME_OUT_OF_HERE: PROC;
+     EXEC CICS RETURN;
+   END GET_ME_OUT_OF_HERE;
+
+   /*****************************************************************/
+   /* ABEND_ROUTINE - Log the error and abend; CICS backs out the   */
+   /* unit of work, so an uncommitted MQGET is put back on the      */
+   /* queue. Set BOTHRESH on the queue to stop poison messages.     */
+   /*****************************************************************/
+   ABEND_ROUTINE: PROC;
+
+     EXEC CICS WRITEQ TD QUEUE('CSMT')
+               FROM(WS_LOG_MSG)
+               LENGTH(WS_LOG_LEN)
+               RESP(WS_CICS_RESP) RESP2(WS_CICS_RESP2);
+
+     EXEC CICS ABEND ABCODE('MQTG')
+               NODUMP;
+
+   END ABEND_ROUTINE;
+
+ END MQTRIG;

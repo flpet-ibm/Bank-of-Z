@@ -49,6 +49,20 @@
                     }
                 }
             }
+        },
+        "rse-123-456-789-1": {
+            "type": "rse",
+            "properties": {
+                "host": "123.456.789.1",
+                "port": 8195,
+                "basePath": "rseapi",
+                "protocol": "https",
+                "rejectUnauthorized": false
+            },
+            "secure": [
+                "user",
+                "password"
+            ]
         }
     },
     "defaults": {
