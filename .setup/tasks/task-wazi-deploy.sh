@@ -66,7 +66,7 @@ finalize_results() {
         tar cf "$LOG_TAR" "$OUTPUT_FOLDER" 2>/dev/null || true
     else
         echo "No Wazi Deploy logs found" > "$OUTPUT_FOLDER/wazi-deploy-console.log"
-        tar cf "$LOG_TAR" "$OUTPUT_FOLDERs" 2>/dev/null || true
+        tar cf "$LOG_TAR" "$OUTPUT_FOLDER" 2>/dev/null || true
     fi
     chtag -b "$LOG_TAR"
 
@@ -198,8 +198,7 @@ fi
 
 rm -f message.log
 
-print_info "Executing command:"
-print_info "\t$CMD"
+print_info "Executing deployment command (credential arguments omitted)"
 : > "${OUTPUT_FOLDER}/wazideploy-deploy-bankz.console.log"
 ${CMD} 2>&1 | tee "${OUTPUT_FOLDER}/wazideploy-deploy-bankz.console.log" | while IFS= read -r line
 do

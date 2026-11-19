@@ -4,7 +4,7 @@
 # Source library scripts
 # =========================
 LOCAL_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export CONFIG_FILE="${CONFIG_FILE:-$LOCAL_SCRIPTS_DIR/config.yaml}"
+export CONFIG_FILE="${BOZ_CONFIG_FILE:-$LOCAL_SCRIPTS_DIR/config.yaml}"
 ENV_FILE="${LOCAL_SCRIPTS_DIR}/.env"
 export LIB_DIR="$LOCAL_SCRIPTS_DIR/../lib"
 source "$LIB_DIR/utilities.sh"
@@ -12,10 +12,17 @@ source "$LIB_DIR/colors.sh"
 source "$LIB_DIR/prerequisites.sh"
 export USER=$(printf '%s' "${USER:-${LOGNAME:-$(basename "$HOME")}}" | tr '[:lower:]' '[:upper:]')
 set +e
+
 # Load CICS/IMS credentials
 if [[ -f $HOME/.profile.bankz ]]; then
     source $HOME/.profile.bankz 2>/dev/null
 fi
+
+export ROOT_FOLDER_NAME="$(basename "$(cd "$LOCAL_SCRIPTS_DIR/../.." && pwd)")"
+
+# A profile can clear USER. Resolve it after loading profile settings because
+# config.yaml uses ${USER} for z/OS user defaults.
+export USER=$(printf '%s' "${USER:-${LOGNAME:-$(basename "$HOME")}}" | tr '[:lower:]' '[:upper:]')
 if git rev-parse --show-toplevel >/dev/null 2>&1; then
     repo_name=$(basename "$(git rev-parse --show-toplevel)")
     if [[ "$repo_name" =~ ^Bank-of-Z ]]; then
@@ -34,11 +41,17 @@ set -e
 
 TEMPLATE_FILE="${LOCAL_SCRIPTS_DIR}/.env.template"
 
-if [[ ! -f "$ENV_FILE" || "$ENV_FILE" -ot "$CONFIG_FILE" || "$ENV_FILE" -ot "${BASH_SOURCE[0]}" ]]; then
-    print_warning "Creating $ENV_FILE file ..."
-    print_warning " - Not already exists or not in sync with:"
-    print_warning "   - '$CONFIG_FILE'"
-    print_warning "   - '${BASH_SOURCE[0]}'"
+env_reason=""
+if [[ ! -f "$ENV_FILE" ]]; then
+    env_reason="it does not exist"
+elif [[ "$ENV_FILE" -ot "$CONFIG_FILE" ]]; then
+    env_reason="it is older than '$CONFIG_FILE'"
+elif [[ "$ENV_FILE" -ot "${BASH_SOURCE[0]}" ]]; then
+    env_reason="it is older than '${BASH_SOURCE[0]}'"
+fi
+
+if [[ -n "$env_reason" ]]; then
+    print_info "Creating $ENV_FILE file because $env_reason ..."
     cat > "$TEMPLATE_FILE" <<'EOF'
 # =========================
 # Environment
@@ -54,6 +67,7 @@ ZOS_KEYRING="{{ global.zos_keyring }}"
 ZOS_CREATE_CERTS="{{ global.zos_create_certs }}"
 
 # Application
+APP_NAME="{{ app.app_name }}"
 APP_BASE_NAME="{{ app.base_name }}"
 APP_SHORT_NAME="{{ app.short_name }}"
 APP_BASE_NAME_LOWER="{{ app.base_name | lower }}"
@@ -156,6 +170,8 @@ IMS_DATABASE_LOCK_MANAGER_SERVER_NAME="${IMS_DATABASE_LOCK_MANAGER_SERVER_NAME:-
 # zconfig
 ZCONFIG_ZCB_HOME="{{ zconfig.zcb_home }}"
 ZCONFIG_HOME="${ZCONFIG_HOME:-{{ zconfig.zconfig_home }}}"
+# zconfig instrumentation
+ZCONFIG_CONSUMER="${ZCONFIG_CONSUMER:-{{ app.app_name }}}"
 
 # Debug
 DEBUG_HLQ="{{ debug.debug_hlq }}"
@@ -164,9 +180,33 @@ DEBUG_TCPIP_HQL="{{ debug.tcpip_hlq }}"
 EQAPROF_CONF_DIR="{{ debug.eqaprof_conf_dir }}"
 
 # Db2
+{% set provisioning = db2_provisioning | default({}) %}
+DB2_PROVISION_CATALOG="${DB2_PROVISION_CATALOG-{{ provisioning.catalog | default('') }}}"
+DB2_PROVISION="${DB2_PROVISION:-{{ cfg.db2_provision | default('false') }}}"
+DB2_REPROVISION="${DB2_REPROVISION:-{{ cfg.db2_reprovision | default('false') }}}"
 DB2_HLQ="${DB2_HLQ:-{{ db2.db2_hlq }}}"
 DB2_SSID="${DB2_SSID:-{{ db2.ssid }}}"
 DB2_JAVA_FOLDER="${DB2_JAVA_FOLDER:-{{ db2.db2_java_dir }}}"
+DB2_PROVISION_USER_CATALOG="${DB2_PROVISION_USER_CATALOG:-{{ provisioning.user_catalog | default('') }}}"
+DB2_PROVISION_AUTHID="${DB2_PROVISION_AUTHID:-{{ provisioning.authid | default('') }}}"
+DB2_PROVISION_VOLUME="${DB2_PROVISION_VOLUME:-{{ provisioning.volume | default('') }}}"
+DB2_PROVISION_STORAGE_CLASS="${DB2_PROVISION_STORAGE_CLASS:-{{ provisioning.storage_class | default('') }}}"
+DB2_PROVISION_DATA_CLASS="${DB2_PROVISION_DATA_CLASS:-{{ provisioning.data_class | default('') }}}"
+DB2_PROVISION_JAVA_HOME="${DB2_PROVISION_JAVA_HOME:-{{ provisioning.java_home | default('') }}}"
+DB2_PROVISION_JAVAENV="${DB2_PROVISION_JAVAENV:-{{ provisioning.javaenv | default('') }}}"
+DB2_PROVISION_JAVAENVV="${DB2_PROVISION_JAVAENVV:-{{ provisioning.javaenvv | default('') }}}"
+DB2_PROVISION_JVMPROPS="${DB2_PROVISION_JVMPROPS:-{{ provisioning.jvmprops | default('') }}}"
+DB2_PROVISION_SDSNEXIT="${DB2_PROVISION_SDSNEXIT:-{{ provisioning.sdsnexit | default('') }}}"
+DB2_PROVISION_START_TIMEOUT_SECONDS="${DB2_PROVISION_START_TIMEOUT_SECONDS:-{{ provisioning.start_timeout_seconds | default(180) }}}"
+
+# MQ
+MQ_QMGR_NAME=$(get_section_value 'mq' 'qmgr_name')
+MQ_INSTALL_HLQ=$(get_section_value 'mq' 'install_hlq')
+MQ_QMGR_HLQ=$(get_section_value 'mq' 'qmgr_hlq')
+MQ_CPF=$(get_section_value 'mq' 'cpf')
+MQ_PROCLIB=$(get_section_value 'mq' 'proclib')
+MQ_OTMA_GROUP=$(get_section_value 'mq' 'otma_group')
+MQ_OTMA_IMS=$(get_section_value 'mq' 'otma_ims')
 
 # Zowe Configuration
 ZOWE_RSE_PROFILE="{{ zowe.rse_profile }}"
@@ -181,10 +221,11 @@ chmod 777 "$ENV_FILE" 2>/dev/null || true
 source "$ENV_FILE"
 set +a
 
+DB2_PROVISION=$(printf '%s' "$DB2_PROVISION" | tr '[:upper:]' '[:lower:]')
+DB2_REPROVISION=$(printf '%s' "$DB2_REPROVISION" | tr '[:upper:]' '[:lower:]')
+
 # List of variables to check
 VARS_TO_CHECK=(
-  NEXUS_USER
-  NEXUS_PASSWORD
   IMS_USER
   IMS_PASSWORD
   CICS_USER
@@ -200,7 +241,7 @@ if [ "$(uname)" = "OS/390" ]; then
         error=1
       fi
     done
-    
+
     if [ "$error" -eq 1 ]; then
       print_error "One or more variables are missing. Stopping script." >&2
       rm -f "$ENV_FILE"
@@ -210,3 +251,4 @@ if [ "$(uname)" = "OS/390" ]; then
 fi
 
 export PATH=${PYTHON_HOME:-}/bin:$JAVA_HOME:/bin:$PATH
+
