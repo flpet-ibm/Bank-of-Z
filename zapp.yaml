@@ -25,7 +25,7 @@ propertyGroups:
       - name: syslib
         type: local
         locations:
-          - "**/plinc"
+          - "src/base/cics/plinc"
   # ── HLASM ───────────────────────────────────────────────────────────
   # syslib : no macro library exists in the workspace
   - name: asm-local
@@ -54,7 +54,7 @@ propertyGroups:
              - CICSTS63.CICS.SDFHCOB
             
 profiles:
-  # Analysis scope (source directories to scan)
+  # Analysis scope for Bob Z metadata scan
   - name: my-analysis
     type: analysis
     settings:

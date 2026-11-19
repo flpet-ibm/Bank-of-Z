@@ -84,7 +84,7 @@ PR checks will reject unsigned commits. See [`.bob/git-commit-guidelines.md`](.b
 
 **DATA_DICTIONARY:** `bobz/DD.json`
 
-A scanned program database is available at the path stored in `.bobz/local-settings.json` (`databaseLocation`). Use the `execute_sql_query` tool for cross-program analysis before reading individual source files.
+No local scan database is kept in the workspace. For cross-program analysis (for example DB2 table usage), search the sources directly, or run `scan_program` after getting user approval.
 
 ## COBOL Coding Patterns
 
@@ -125,11 +125,26 @@ Full documentation: <https://ibm.github.io/Bank-of-Z/>
 | Commands reference | `docs/docs/reference/commands-reference.md` |
 | Environment config | `.setup/config/config.yaml` |
 
-**Auto-update rule:** When modifying COBOL/PL/I programs or build configuration, check whether the corresponding documentation file is affected and prompt for synchronization.
+**Program to documentation mapping** (the docs describe components, not individual programs):
+
+| Programs | Documentation File(s) | Purpose |
+|----------|----------------------|---------|
+| CICS COBOL and PL/I programs (`src/base/cics/cobol`, `src/base/cics/pli`) | `docs/docs/architecture/application-flow.md`, `docs/docs/architecture/application-components.md` | CICS request path and Db2 access |
+| IMS COBOL and PL/I programs, PSBs, DBDs, Java bridge (`src/base/ims`) | `docs/docs/architecture/application-flow.md`, `docs/docs/architecture/application-components.md` | IMS TM request path and IMS database |
+| Batch JCL and PL/I (`src/base/batch`) | `docs/docs/reference/repository-structure.md`, `docs/docs/reference/commands-reference.md` | Batch jobs and statement reporting |
+| MQ-triggered program (`src/base/mq`, `MQTRIG`) | `docs/docs/reference/repository-structure.md` | MQ trigger path to CICS transaction `OMQT` |
+| `INQCUST` | `docs/docs/tutorials/debug-cics-transaction.md` | Worked debug example for the CICS customer inquiry |
+| IMS transaction path | `docs/docs/tutorials/debug-ims-transaction.md`, `docs/docs/tutorials/ims-enhancement.md` | IMS debug and enhancement walkthroughs |
+| CICS enhancement | `docs/docs/tutorials/cics-enhancement-scenario.md` | CICS change walkthrough |
+
+**Auto-update rules:**
+1. When modifying COBOL/PL/I programs or build configuration, check the mapped documentation and prompt for synchronization if it is affected.
+2. When analyzing a program, read its mapped documentation for context.
+3. Update the mapping table when programs or documentation are added.
 
 ## Zowe Profile
 
-The default Zowe profile is `bank-of-z` (z/OSMF port 9444, RSE port 8195, SSH port 22). See [`zowe.config.json`](zowe.config.json). Credentials are stored in the Zowe secure credential store (not in the file).
+The default Zowe profile is `bank-of-z`, defined in [`zowe.config.json`](zowe.config.json). Credentials are stored in the Zowe secure credential store (not in the file).
 
 ## ZAPP Configuration
 
@@ -147,13 +162,6 @@ The default Zowe profile is `bank-of-z` (z/OSMF port 9444, RSE port 8195, SSH po
 **MVS datasets (remote-libraries, PL/I):** `DEV.ZAPPBUIL.BMS.COPY`, `CICSTS63.CICS.SDFHCOB`
 
 **Profiles defined:** `my-analysis` (analysis), `taz-test` (test), `zcodescan` (zcodescan), `zBuilder-userbuild` (dbb)
-
-**Analysis scope (`my-analysis`):** `containsCics: true`, `imsRuntime: IMS_BMP`
-- cobol-scope: `src/base/cics/cobol`, `src/base/ims/cobol`
-- pl1-scope: `src/base/cics/pli`, `src/base/ims/pli`, `src/base/batch/pli`
-- hlasm-scope: `src/base/ims/DBD`, `src/base/ims/PSB`
-- jcl-scope: `src/base/batch/jcl`
-- IMS libraries: ims-psb `src/base/ims/PSB`, ims-dbd `src/base/ims/DBD`
 
 **Custom variables used:** `${dbbHlq}`, `${errPrefix}` (define under `zopeneditor.zapp.variables` in VS Code user settings)
 
