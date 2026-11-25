@@ -1,4 +1,4 @@
-       01  BNK1CAI.
+       01  BNK1CAI. 
            02  FILLER PIC X(12).
            02  COMPANYL    COMP  PIC  S9(4).
            02  COMPANYF    PICTURE X.
