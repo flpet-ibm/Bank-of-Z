@@ -1,4 +1,4 @@
-       01  BNK1B2I.
+       01  BNK1B2I. 
            02  FILLER PIC X(12).
            02  COMPANYL    COMP  PIC  S9(4).
            02  COMPANYF    PICTURE X.
